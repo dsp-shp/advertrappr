@@ -1,0 +1,7 @@
+beautifulsoup4==4.12.3
+pandas==2.2.1
+psycopg2-binary==2.9.9
+python-telegram-bot==21.0.1
+selenium==4.19.0
+sqlalchemy==2.0.29
+webdriver-manager==4.0.1
