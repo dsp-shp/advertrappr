@@ -20,29 +20,9 @@ OPTIONS: Options = Options()
 for x in ('--disable-gpu', '--no-sandbox', '--headless',):
     OPTIONS.add_argument(x)
 
-ENGINE: Engine = create_engine('postgresql+psycopg2://postgres:zz1234@localhost:5432/postgres', isolation_level="AUTOCOMMIT")
-with ENGINE.connect() as con:
-    con.execute(text("""
-        create table if not exists ads (
-            service varchar,
-            id varchar,
-            title varchar,
-            location varchar,
-            station varchar,
-            price varchar,
-            description varchar,
-            link varchar,
-            processed timestamp default now() + interval '3 hour'
-        );
-
-        create table if not exists dms (
-            service varchar,
-            id varchar,
-            link varchar,
-            error varchar,
-            processed timestamp default now() + interval '3 hour'
-        );
-    """))
+ENGINE: Engine
+CHAT_ID: str
+BOT: telegram.Bot
 
 logger = logging.getLogger(__name__)
 
@@ -255,9 +235,33 @@ def cli() -> None:
     parser.add_argument('--retention', help='Data retention depth', type=int)
     parser.add_argument('--cooldown', help='Time in seconds to sleep', type=int)
     args: dict[str, str] = {k:v for k,v in vars(parser.parse_args()).items() if v}
-    
+
+    global BOT, CHAT_ID, ENGINE
     BOT = telegram.Bot(token=args.pop('token'))
     CHAT_ID = args.pop('chat_id')
+    ENGINE = create_engine('postgresql+psycopg2://postgres:zz1234@localhost:5432/postgres', isolation_level="AUTOCOMMIT")
+    with ENGINE.connect() as con:
+        con.execute(text("""
+            create table if not exists ads (
+                service varchar,
+                id varchar,
+                title varchar,
+                location varchar,
+                station varchar,
+                price varchar,
+                description varchar,
+                link varchar,
+                processed timestamp default now() + interval '3 hour'
+            );
+
+            create table if not exists dms (
+                service varchar,
+                id varchar,
+                link varchar,
+                error varchar,
+                processed timestamp default now() + interval '3 hour'
+            );
+        """))
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main(**args))
