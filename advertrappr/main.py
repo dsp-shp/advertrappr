@@ -5,12 +5,13 @@ from selenium.webdriver.chrome.options import Options
 from sqlalchemy import create_engine, Engine
 from sqlalchemy.sql import text
 ###
-import os
 import argparse
 import asyncio
 import logging
+import os
 import pandas as pd
 import re
+import sys
 import telegram
 import typing as t
 
@@ -81,28 +82,42 @@ def prepare(
     
     return text
 
-def parse_avito(soup: BeautifulSoup, url: str = 'https://www.avito.ru') -> list[dict]:
+def parse_avito(
+    soup: BeautifulSoup, 
+    url: str = 'https://www.avito.ru',
+    limit: int = 10
+) -> list[dict]:
     """ Парсинг объявлений Авито 
     """
-    results = soup.find_all('div', {'class': 'iva-item-root-_lk9K'})[:10][::-1] ### выбрать первые 20 и отсортировать от старых к новым
+    results = soup.find_all('div', {'class': 'iva-item-root-_lk9K'})[:limit][::-1] ### выбрать первые n и отсортировать от старых к новым
     ads: list[dict] = []
     for x in results:
         try:
             ads.append({
                 'service': 'avito',
-                'id': x.get('data-item-id'),
-                'title': x.find('div', attrs={'class':'iva-item-titleStep-pdebR'}).find('a').text.replace('\xa0', ' '),
-                'location': x.find('div', attrs={'class': 'geo-root-zPwRk'}).find('p').text.replace('\xa0', ' '),
-                'station':  ', '.join([y.text.replace('\xa0', '') for y in x.find('p', attrs={'class': 'styles-module-root_top-p0_50'}).find_all('span')[1:] if y.text]),
-                # 'station': '%s, %s' % (
-                #     x.find('div', attrs={'class': 'geo-root-zPwRk'}).find_all('p')[-1].find_all('span')[1].text,
-                #     x.find('div', attrs={'class': 'geo-root-zPwRk'}).find_all('p')[-1].find_all('span')[2].text
-                # ),
+                'id': str(x.get('data-item-id')).strip(),
+                'title': x.find(
+                    'div', attrs={'class':'iva-item-titleStep-pdebR'}
+                ).find('a').text.replace('\xa0', ' '),
+                'location': x.find(
+                    'div', attrs={'class': 'geo-root-zPwRk'}
+                ).find('p').text.replace('\xa0', ' '),
+                'station':  ', '.join([
+                    y.text.replace('\xa0', '') for y in x.find(
+                        'p', attrs={'class': 'styles-module-root_top-p0_50'}
+                    ).find_all('span')[1:] if y.text
+                ]),
                 'price': '%s · %s' % (
-                    x.find('div', attrs={'class': 'iva-item-priceStep-uq2CQ'}).text.replace('\xa0', ' '),
-                    x.find('div', attrs={'class': 'iva-item-autoParamsStep-WzfS8'}).text.replace('\xa0', ' ')
+                    x.find(
+                        'div', attrs={'class': 'iva-item-priceStep-uq2CQ'}
+                    ).text.replace('\xa0', ' '),
+                    x.find(
+                        'div', attrs={'class': 'iva-item-autoParamsStep-WzfS8'}
+                    ).text.replace('\xa0', ' ')
                 ),
-                'description': x.find('div', attrs={'class': 'iva-item-descriptionStep-C0ty1'}).text.replace('\xa0', ' '),
+                'description': x.find(
+                    'div', attrs={'class': 'iva-item-descriptionStep-C0ty1'}
+                ).text.replace('\xa0', ' '),
                 'link': url + str(x.find('a').get('href'))
             })
         except Exception as e:
@@ -110,6 +125,7 @@ def parse_avito(soup: BeautifulSoup, url: str = 'https://www.avito.ru') -> list[
                 {'service': 'avito', 'link': url + str(x.find('a').get('href'))}
             )
             logger.error('%s (%s)' % (e, x.get('data-item-id')))
+    logger.info('Ошибок парсинга: %s' % len([x for x in ads if not x.get('title')]))
     return ads
 
 def parse(service: str, link: str, ads: set = set()) -> list[dict]:
@@ -117,16 +133,18 @@ def parse(service: str, link: str, ads: set = set()) -> list[dict]:
 
     """
     driver = None
+
     parsed_ads: list[dict] = []
     try:
         driver = webdriver.Chrome(options=OPTIONS)
         driver.get(link)
         source: str = driver.page_source
-        ### logging.info('Размер исходного кода: %s' % len(source))
+        logger.debug('Размер исходного кода страницы: %s' % len(source))
         soup = BeautifulSoup(source, 'html.parser')
-        ### logger.info(globals()['parse_%s' % service])
         parsed_ads = globals()['parse_%s' % service](soup)
-        return [x for x in parsed_ads if x.get('id') and x.get('id') not in ads]
+        new_ads = [x for x in parsed_ads if x.get('id') and x.get('id') not in ads]
+        logger.info('Найдено новых объявлений: %s' % len(new_ads))
+        return new_ads
     except Exception as e:
         logger.error(e)
         return []
@@ -143,7 +161,9 @@ async def main(
     """ Основная функция
     
     """
-    services: dict[str, str] = {k:v for k,v in locals().items() if k.endswith('_url') and v}
+    services: dict[str, str] = {
+        k.replace('_url', ''):v for k,v in locals().items() if v and '_url' in k
+    } ### корректировка для удаления '_url' подстроки из названия сервиса
     
     os.system('pkill chrome') ### завершить все неактуальные процессы
     ### Если не предоставлен ни один запрос
@@ -161,13 +181,17 @@ async def main(
         """ % {'r': retention}))
 
     while True:
+        df: pd.DataFrame = pd.DataFrame()
         with ENGINE.connect() as con:
             ### Выбрать уже имеющиеся в базе данных объявления
-            df: pd.DataFrame = pd.read_sql_table('ads', con=con)
+            df = pd.read_sql_table('ads', con=con)
         ads: list[dict] = []
         dms: list[dict] = []
+        stored_ads: set[str] = set()
         for service, link in services.items():
-            ads += parse(service, link, {*df[df.service==service].id})
+            stored_ads = {x.strip() for x in df[df.service == service].id if x}
+            logger.debug('Объявлений хранится: %s' % len(stored_ads))
+            ads += parse(service, link, stored_ads)
        
         if not ads:
             await asyncio.sleep(cooldown)
@@ -175,14 +199,22 @@ async def main(
         
         ### Сохранить данные
         with ENGINE.connect() as con:
-            pd.DataFrame(ads).to_sql('ads', con=con, if_exists='append', index=False)
+            pd.DataFrame(ads).to_sql(
+                'ads', 
+                con=con, 
+                if_exists='append', 
+                index=False
+            )
         
         for x in ads:
             error: str | None = None
             async with BOT:
                 try:
                     await BOT.send_message(
-                        text=prepare(**x), parse_mode='MarkdownV2', chat_id=CHAT_ID, disable_web_page_preview=True
+                        text=prepare(**x), 
+                        parse_mode='MarkdownV2', 
+                        chat_id=CHAT_ID, 
+                        disable_web_page_preview=True
                     ) # type: ignore
                 except Exception as e:
                     error = str(e)
@@ -193,13 +225,23 @@ async def main(
         
         ### Залогировать отправку
         with ENGINE.connect() as con:
-            pd.DataFrame(dms)[['service', 'id', 'link', 'error']].to_sql('dms', con=con, if_exists='append', index=False)
+            pd.DataFrame(dms)[['service', 'id', 'link', 'error']].to_sql(
+                'dms', 
+                con=con, 
+                if_exists='append', 
+                index=False
+            )
 
         await asyncio.sleep(cooldown)
 
+def cli() -> None:
+    log_dir = os.path.join(os.path.expanduser('~'), '.advertrappr')
+    os.makedirs(os.path.join(log_dir), exist_ok=True)
+    with open(os.path.join(log_dir, 'out.log'), 'w') as f:
+        f.write('')
 
-if __name__ in ('__main__'):
     logging.basicConfig(
+        ### filename=os.path.join(log_dir, 'out.log'),
         level=logging.INFO,
         format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
@@ -211,7 +253,7 @@ if __name__ in ('__main__'):
     parser.add_argument('--token', help='Telegram bot token', type=str)
     parser.add_argument('--chat-id', help='Telegram chat ID', type=str)
     parser.add_argument('--retention', help='Data retention depth', type=int)
-    parser.add_argument('--cooldown', help='Time for script in seconds to sleep before next search', type=int)
+    parser.add_argument('--cooldown', help='Time in seconds to sleep', type=int)
     args: dict[str, str] = {k:v for k,v in vars(parser.parse_args()).items() if v}
     
     BOT = telegram.Bot(token=args.pop('token'))
@@ -219,3 +261,7 @@ if __name__ in ('__main__'):
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main(**args))
+
+
+if __name__ in ('__main__'):
+    sys.exit(cli())
