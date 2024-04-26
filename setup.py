@@ -5,7 +5,9 @@ from setuptools import setup, find_packages
 setup(
     name='advertrappr',
     version='0.0.1',
-    description='',
+    description="",
+    long_description=open('README.md', 'r').read(),
+    long_description_content_type="text/markdown",
     url='https://github.com/dsp-shp/advertrappr',
     author='Ivan Derkach',
     author_email='dsp_shp@icloud.com',

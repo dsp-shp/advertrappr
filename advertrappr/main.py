@@ -16,16 +16,14 @@ import telegram
 import typing as t
 
 
+BOT: telegram.Bot
+CHAT_ID: str
+ENGINE: Engine
 OPTIONS: Options = Options()
 for x in ('--disable-gpu', '--no-sandbox', '--headless',):
     OPTIONS.add_argument(x)
 
-ENGINE: Engine
-CHAT_ID: str
-BOT: telegram.Bot
-
 logger = logging.getLogger(__name__)
-
 
 def prepare(
     service: str,
@@ -234,12 +232,13 @@ def cli() -> None:
     parser.add_argument('--chat-id', help='Telegram chat ID', type=str)
     parser.add_argument('--retention', help='Data retention depth', type=int)
     parser.add_argument('--cooldown', help='Time in seconds to sleep', type=int)
+    parser.add_argument('--con-string', help='PG\' connection URI', type=str)
     args: dict[str, str] = {k:v for k,v in vars(parser.parse_args()).items() if v}
 
     global BOT, CHAT_ID, ENGINE
     BOT = telegram.Bot(token=args.pop('token'))
     CHAT_ID = args.pop('chat_id')
-    ENGINE = create_engine('postgresql+psycopg2://postgres:zz1234@localhost:5432/postgres', isolation_level="AUTOCOMMIT")
+    ENGINE = create_engine(args.pop('con_string'), isolation_level="AUTOCOMMIT")
     with ENGINE.connect() as con:
         con.execute(text("""
             create table if not exists ads (
