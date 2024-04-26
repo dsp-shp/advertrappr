@@ -23,6 +23,14 @@ ENGINE: Engine
 OPTIONS: Options = Options()
 for x in ('--disable-gpu', '--no-sandbox', '--headless',):
     OPTIONS.add_argument(x)
+MSG_TMP: str =  '⠀\n\
+*%(service_capt)s: [%(title)s]\\(%(link_repl)s\\)*\n\
+⠀\n\
+*%(station)s* [%(location)s]\\(https://2gis.ru/spb/search/Cанкт-Петербург,⠀%(location_repl)s\\)\n\
+_%(price)s_\n\
+⠀\n\
+>%(description_repl)s...\n\
+\n⠀'
 
 logger = logging.getLogger(__name__)
 
@@ -39,19 +47,21 @@ def prepare(
 ) -> str:
     """ Подготовка сообщения
     
+    Идентификатор объявления `id` здесь является маркером корректности парсинга
+    объявления: в случае если `id` отсутствует, можно считать, что объявление
+    обработанно некорректно.
+
     """
     if id:
-        text: str = '\n'.join([
-            '⠀',
-            '*%s: [%s]\\(%s\\)*' % (service.capitalize(), title, link.replace('_', '\\_')),
-            '⠀',
-            '*%s* [%s]\\(https://2gis.ru/spb/search/Cанкт-Петербург,⠀%s\\)' % (station, location, location.replace(' ', '⠀')),
-            '_%s_' % price,
-            '⠀\n>%s...' % re.sub(r'\n[\ |\n|\t]*', ' ', description).replace('  ', ' ')[:200],
-            '\n⠀'
-        ])
+        service_capt = service.capitalize()
+        link_repl = link.replace('_', '\\_')
+        location_repl = location.replace(' ', '⠀')
+        description_repl = re.sub(
+            r'\n[\ |\n|\t]*', ' ', description
+        ).replace('  ', ' ')[:200]
+        text = MSG_TMP % locals()
     else:
-        text: str = '⠀\n*Ошибка парсинга:*  %s\n⠀' % link
+        text = '⠀\n*Ошибка парсинга:*  %s\n⠀' % link
     
     ### Экранирование сообщения
     for c in ('.', '-', '+', '(', ')', '!'):
@@ -68,7 +78,7 @@ def parse_avito(
 ) -> list[dict]:
     """ Парсинг объявлений Авито 
     """
-    results = soup.find_all('div', {'class': 'iva-item-root-_lk9K'})[:limit][::-1] ### выбрать первые n и отсортировать от старых к новым
+    results = soup.find_all('div', {'class': 'iva-item-root-_lk9K'})[:limit][::-1] 
     ads: list[dict] = []
     for x in results:
         try:
@@ -104,7 +114,7 @@ def parse_avito(
                 {'service': 'avito', 'link': url + str(x.find('a').get('href'))}
             )
             logger.error('%s (%s)' % (e, x.get('data-item-id')))
-    logger.info('Ошибок парсинга: %s' % len([x for x in ads if not x.get('title')]))
+    logger.info('Ошибок парсинга: %s' % len([x for x in ads if not x.get('id')]))
     return ads
 
 def parse(service: str, link: str, ads: set = set()) -> list[dict]:
