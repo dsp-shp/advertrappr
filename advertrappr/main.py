@@ -18,6 +18,7 @@ import typing as t
 
 BOT: telegram.Bot
 CHAT_ID: str
+CON_STRING: str
 ENGINE: Engine
 OPTIONS: Options = Options()
 for x in ('--disable-gpu', '--no-sandbox', '--headless',):
@@ -213,33 +214,53 @@ async def main(
         await asyncio.sleep(cooldown)
 
 def cli() -> None:
-    log_dir = os.path.join(os.path.expanduser('~'), '.advertrappr')
-    os.makedirs(os.path.join(log_dir), exist_ok=True)
-    with open(os.path.join(log_dir, 'out.log'), 'w') as f:
-        f.write('')
-
-    logging.basicConfig(
-        ### filename=os.path.join(log_dir, 'out.log'),
-        level=logging.INFO,
-        format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    logging.info('Идентификатор процесса: %s' % os.getpid())
     parser = argparse.ArgumentParser()
-    parser.add_argument('-a', '--avito-url', help='Avito URL', type=str)
-    parser.add_argument('-c', '--cian-url', help='Cian URL', type=str)
-    parser.add_argument('--token', help='Telegram bot token', type=str)
-    parser.add_argument('--chat-id', help='Telegram chat ID', type=str)
-    parser.add_argument('--retention', help='Data retention depth', type=int)
-    parser.add_argument('--cooldown', help='Time in seconds to sleep', type=int)
-    parser.add_argument('--con-string', help='PG\' connection URI', type=str)
+    parser.add_argument('-a', '--avito-url', type=str, 
+        help='Avito search URL')
+    parser.add_argument('-c', '--cian-url', type=str, 
+        help='Cian search URL')
+    parser.add_argument('--token', type=str, 
+        help='Telegram Bot\' token string')
+    parser.add_argument('--chat-id', type=str, 
+        help='Telegram chat ID')
+    parser.add_argument('--con-string', type=str, 
+        help='Postgres\' connection URI')
+    parser.add_argument('--retention', type=int, default=7, 
+        help='Data retention depth (days, default=7)')
+    parser.add_argument('--cooldown', type=int, default=90, 
+        help='Time to sleep before next search (secs, default=90)')
+    parser.add_argument('--log-output', type=str, default='stdout', 
+        help='Logging output type, default="stdout"')
     args: dict[str, str] = {k:v for k,v in vars(parser.parse_args()).items() if v}
 
-    global BOT, CHAT_ID, ENGINE
+    ### Инициализация системы логирования
+    log_params: dict[str, t.Any] = {
+        'level': logging.INFO,
+        'format': '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+        'datefmt': '%Y-%m-%d %H:%M:%S'
+    }
+    log_output: str = args.pop('log_output')
+    if log_output == 'file':
+        log_dir = os.path.join(os.path.expanduser('~'), '.advertrappr')
+        os.makedirs(os.path.join(log_dir), exist_ok=True)
+        log_output = os.path.join(log_dir, 'out.log')
+        with open(log_output, 'w') as f: f.write('')
+        log_params['filename'] = log_output
+    elif log_output == 'stdout':
+        log_output = log_output.upper()
+    else:
+        raise Exception('Способ логирования - "%s" неизвестен' % log_output)
+    logging.basicConfig(**log_params)
+    logging.info('Инициализировано логирование в %s' % log_output)
+   
+    ### Определение параметров подключения к внешним сервисам
+    global BOT, CHAT_ID, CON_STRING, ENGINE 
     BOT = telegram.Bot(token=args.pop('token'))
     CHAT_ID = args.pop('chat_id')
-    ENGINE = create_engine(args.pop('con_string'), isolation_level="AUTOCOMMIT")
-    with ENGINE.connect() as con:
+    CON_STRING = args.pop('con_string')
+    ENGINE = create_engine(CON_STRING, isolation_level="AUTOCOMMIT")
+    
+    with ENGINE.connect() as con: ### ициниализация необходимых объектов
         con.execute(text("""
             create table if not exists ads (
                 service varchar,
