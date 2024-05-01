@@ -1,3 +1,4 @@
+from .utils import parsers
 from bs4 import BeautifulSoup
 from datetime import datetime
 from selenium import webdriver
@@ -71,52 +72,6 @@ def prepare(
     
     return text
 
-def parse_avito(
-    soup: BeautifulSoup, 
-    url: str = 'https://www.avito.ru',
-    limit: int = 10
-) -> list[dict]:
-    """ Парсинг объявлений Авито 
-    """
-    results = soup.find_all('div', {'class': 'iva-item-root-_lk9K'})[:limit][::-1] 
-    ads: list[dict] = []
-    for x in results:
-        try:
-            ads.append({
-                'service': 'avito',
-                'id': str(x.get('data-item-id')).strip(),
-                'title': x.find(
-                    'div', attrs={'class':'iva-item-titleStep-pdebR'}
-                ).find('a').text.replace('\xa0', ' '),
-                'location': x.find(
-                    'div', attrs={'class': 'geo-root-zPwRk'}
-                ).find('p').text.replace('\xa0', ' '),
-                'station':  ', '.join([
-                    y.text.replace('\xa0', '') for y in x.find(
-                        'p', attrs={'class': 'styles-module-root_top-p0_50'}
-                    ).find_all('span')[1:] if y.text
-                ]),
-                'price': '%s · %s' % (
-                    x.find(
-                        'div', attrs={'class': 'iva-item-priceStep-uq2CQ'}
-                    ).text.replace('\xa0', ' '),
-                    x.find(
-                        'div', attrs={'class': 'iva-item-autoParamsStep-WzfS8'}
-                    ).text.replace('\xa0', ' ')
-                ),
-                'description': x.find(
-                    'div', attrs={'class': 'iva-item-descriptionStep-C0ty1'}
-                ).text.replace('\xa0', ' '),
-                'link': url + str(x.find('a').get('href'))
-            })
-        except Exception as e:
-            ads.append(
-                {'service': 'avito', 'link': url + str(x.find('a').get('href'))}
-            )
-            logger.error('%s (%s)' % (e, x.get('data-item-id')))
-    logger.info('Ошибок парсинга: %s' % len([x for x in ads if not x.get('id')]))
-    return ads
-
 def parse(service: str, link: str, ads: set = set()) -> list[dict]:
     """ Парсинг данных источника 
 
@@ -129,10 +84,14 @@ def parse(service: str, link: str, ads: set = set()) -> list[dict]:
         driver.get(link)
         source: str = driver.page_source
         logger.debug('Размер исходного кода страницы: %s' % len(source))
+
         soup = BeautifulSoup(source, 'html.parser')
-        parsed_ads = globals()['parse_%s' % service](soup)
+        parsed_ads = vars(parsers).get(service).parse(soup)
+        logger.info('Ошибок парсинга: %s' % len([x for x in parsed_ads if not x.get('id')]))
+
         new_ads = [x for x in parsed_ads if x.get('id') and x.get('id') not in ads]
         logger.info('Найдено новых объявлений: %s' % len(new_ads))
+
         return new_ads
     except Exception as e:
         logger.error(e)
@@ -144,12 +103,10 @@ def parse(service: str, link: str, ads: set = set()) -> list[dict]:
 async def main(
     avito_url: str | None = None,
     cian_url: str | None = None,
+	yandex_url: str | None = None,
     retention: int = 7,
     cooldown: int = 90
 ) -> None:
-    """ Основная функция
-    
-    """
     services: dict[str, str] = {
         k.replace('_url', ''):v for k,v in locals().items() if v and '_url' in k
     } ### корректировка для удаления '_url' подстроки из названия сервиса
@@ -224,6 +181,9 @@ async def main(
         await asyncio.sleep(cooldown)
 
 def cli() -> None:
+    """ Команда терминала для захвата объявлений
+
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('-a', '--avito-url', type=str, 
         help='Avito search URL')
