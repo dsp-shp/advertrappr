@@ -1,39 +1,14 @@
-from .utils import parsers
-from bs4 import BeautifulSoup
+from .utils import getLogger, parsers
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from sqlalchemy import create_engine, Engine
-from sqlalchemy.sql import text
-###
-import argparse
 import asyncio
-import logging
 import os
 import pandas as pd
 import re
 import sys
-import telegram
 import typing as t
 
 
-BOT: telegram.Bot
-CHAT_ID: str
-CON_STRING: str
-ENGINE: Engine
-OPTIONS: Options = Options()
-for x in ('--disable-gpu', '--no-sandbox', '--headless',):
-    OPTIONS.add_argument(x)
-MSG_TMP: str =  '⠀\n\
-*%(service_capt)s: [%(title)s]\\(%(link_repl)s\\)*\n\
-⠀\n\
-*%(station)s* [%(location)s]\\(https://2gis.ru/spb/search/Cанкт-Петербург,⠀%(location_repl)s\\)\n\
-_%(price)s_\n\
-⠀\n\
->%(description_repl)s...\n\
-\n⠀'
-
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 def prepare(
     service: str,
@@ -256,6 +231,10 @@ def cli() -> None:
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main(**args))
 
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+
 
 if __name__ in ('__main__'):
-    sys.exit(cli())
+    sys.exit()
+    #sys.exit(cli())
