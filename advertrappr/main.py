@@ -8,44 +8,7 @@ import sys
 import typing as t
 
 
-# logger = logging.getLogger(__name__)
-
-def prepare(
-    service: str,
-    id: str,
-    title: str,
-    location: str,
-    station: str,
-    price: str,
-    description: str,
-    link: str,
-    **kwargs
-) -> str:
-    """ Подготовка сообщения
-    
-    Идентификатор объявления `id` здесь является маркером корректности парсинга
-    объявления: в случае если `id` отсутствует, можно считать, что объявление
-    обработанно некорректно.
-
-    """
-    if id:
-        service_capt = service.capitalize()
-        link_repl = link.replace('_', '\\_')
-        location_repl = location.replace(' ', '⠀')
-        description_repl = re.sub(
-            r'\n[\ |\n|\t]*', ' ', description
-        ).replace('  ', ' ')[:200]
-        text = MSG_TMP % locals()
-    else:
-        text = '⠀\n*Ошибка парсинга:*  %s\n⠀' % link
-    
-    ### Экранирование сообщения
-    for c in ('.', '-', '+', '(', ')', '!'):
-        text = text.replace(c, '\\' + c)
-    for c in ('\\\\(', '\\\\)'):
-        text = text.replace(c, c[-1])
-    
-    return text
+logger = getLogger(__name__)
 
 def parse(service: str, link: str, ads: set = set()) -> list[dict]:
     """ Парсинг данных источника 
@@ -78,7 +41,7 @@ def parse(service: str, link: str, ads: set = set()) -> list[dict]:
 async def main(
     avito_url: str | None = None,
     cian_url: str | None = None,
-	yandex_url: str | None = None,
+    yandex_url: str | None = None,
     retention: int = 7,
     cooldown: int = 90
 ) -> None:

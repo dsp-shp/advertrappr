@@ -24,15 +24,14 @@ def decorate(cls):
         cls_log(self, level, msg, *args, **kwargs)
         fn, lno, func, sinfo = self.findCaller(False, 1)
 
-        if self.log_to_db == True:
-            print('log to database')
+        if not self.log_to_db:
             return
         
         record = [
             datetime.now(), 
             logging.getLevelName(level), 
             fn.split('/')[-1].split('.')[0] + '.' + func,
-            *msg.split(': ', 1)
+            *[*msg.split(': ', 1), None][:2]
         ]
         with connect() as con:
             columns = list(MODELS.get('logs').keys())

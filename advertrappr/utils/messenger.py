@@ -1,6 +1,7 @@
-from .logger import getLogger
+from . import getLogger, Record
 from telegram import Bot as _Bot
-from collections import namedtuple
+from time import sleep
+from typing_extensions import Self
 import asyncio
 import re
 import typing as t
@@ -30,45 +31,49 @@ class Bot(_Bot):
         return self._chat_id
 
     @staticmethod
-    def escape_format(text: str) -> str:
+    def format_record(record: Record | str) -> str:
+        _repl: t.Callable = lambda x: re.sub(
+            r'\n[\ |\n|\t]*', ' ', x ### заменить все отступы символом пробела, 
+        ).replace(' ', '⠀')[:200] ### заменить все пробелы на неразрывные и обрезать
+        
+        text: str = ''
+        try:
+            if not record.id:
+                text = ERROR_MESSAGE % record._asdict()
+            else:
+                text = MESSAGE % {
+                    **record._asdict(),
+                    'location_repl': _repl(record.location),
+                    'description_repl':  _repl(record.description),
+                }
+        except Exception as e:
+            logger.error('Ошибка форматирования: %s' % e)
+
+        return text
+
+    @staticmethod
+    def format_text(record: Record | str) -> str:
+        text: str = record if isinstance(record, str) else Bot.format_record(record)
         for c in ('.', '_', '-', '+', '(', ')', '!'):  
             text = text.replace(c, '\\' + c) ### экранированить символы
         for c in re.findall(r'\\\\.', text):
             text = text.replace(c, c[-1]) ### разэкрaнировать символы разметки
         return text
 
-    @staticmethod
-    def format_message(n: namedtuple) -> str:
-        _repl: t.Callable = lambda x: re.sub(
-            r'\n[\ |\n|\t]*', ' ', x ### заменить все отступы символом пробела, 
-        ).replace(' ', '⠀')[:200] ### заменить все пробелы на неразрывные и обрезать
-        
-        text: str
-        if not n.id:
-            text = ERROR_MESSAGE % n._asdict()
-        else:
-            text = MESSAGE % {
-                **n._asdict(),
-                'location_repl': _repl(n.location),
-                'description_repl':  _repl(n.description),
-            }
-
-        return t.Self.escape_format(text)
-
-    def send_message(self, text: str,  **kwargs) -> None:
+    def send_message(self, record: Record | str, **kwargs) -> None:
         kwargs = {
             'chat_id': self.chat_id,
             'parse_mode': 'MarkdownV2',
             'disable_web_page_preview': True,
             **kwargs,
-            'text': t.Self.format_message(text),
+            'text': Bot.format_text(record),
         }
         try:
             asyncio.run(super().send_message(**kwargs))
         except Exception as e:
-            pass # TODO: залогировать ошибку
+            logger.error('Ошибка отправки: %s' % e)
 
-    def send_messages(self, texts: list[str], cooldown: int = 5, **kwargs) -> None:
+    def send_messages(self, texts: list[Record | str], **kwargs) -> None:
         for x in texts:
-            send_message(x, **kwargs)
-            wait(cooldown)
+            self.send_message(x, **kwargs)
+            sleep(kwargs.get('cooldown', 5))

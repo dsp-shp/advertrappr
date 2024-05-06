@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from collections import namedtuple
 import duckdb
 import os
 import typing as t
@@ -10,7 +11,7 @@ CREATE: t.Callable = lambda table: 'CREATE OR REPLACE TABLE %(t)s (%(s)s);' % {
 }
 MODELS: [str, dict[str, str]] = {
     'advs': {
-        'processed': "timestamp",
+        '__processed': 'timestamp',
         'service': 'varchar',
         'id': 'varchar',
         'title': 'varchar',
@@ -21,7 +22,7 @@ MODELS: [str, dict[str, str]] = {
         'link': 'varchar',
     },
     'logs': {
-        'processed': "timestamp",
+        '__processed': 'timestamp',
         'level': 'varchar',
         'func': 'varchar',
         'text': 'varchar',
@@ -29,6 +30,11 @@ MODELS: [str, dict[str, str]] = {
     },
 }
 PATH: str = os.path.join(os.path.expanduser('~'), '.advertrappr', 'duck.db')
+Record: type = namedtuple(
+    'Record', 
+     {x for x in MODELS.get('advs').keys() if not x.startswith('__')}, 
+    ### defaults=(None,) * len(ADVS_COLS)
+)
 
 @contextmanager
 def connect() -> t.Generator[None, duckdb.DuckDBPyConnection, None]:

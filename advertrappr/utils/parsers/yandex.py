@@ -1,4 +1,4 @@
-from .service import Service
+from ..service import Service
 from bs4 import BeautifulSoup
 
 class Yandex(Service):
