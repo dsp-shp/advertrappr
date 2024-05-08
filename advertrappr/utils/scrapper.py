@@ -15,11 +15,11 @@ def scrape(link: str, handle_captcha: bool = False) -> BeautifulSoup:
     try:
         driver = webdriver.Chrome(options=OPTIONS)
         driver.get(link)
+        
         source: str = driver.page_source
         logger.info('Размер исходного кода: %s' % len(source))
 
         return BeautifulSoup(source, 'html.parser') ### TODO: handle captcha 
-        ### return vars(parsers).get(service).parse(soup)
     except Exception as e:
         logger.error(e)
         return []

@@ -1,55 +1,66 @@
-from .connector import connect, MODELS
 from datetime import datetime
-import json
 import logging
 import typing as t
 import sys
 
 
-FORMAT: str = '%(asctime)s.%(msecs)03d - %(levelname)s - %(module)s.%(funcName)s: %(message)s'
+CONFIG: dict[str, t.Any] = {
+    'level': logging.INFO,
+    'datefmt': '%Y-%m-%d %H:%M:%S',
+    'format': '%(asctime)s.%(msecs)03d - %(levelname)s - %(module)s.%(funcName)s: %(message)s'
+}
 
-def decorate(cls):
-    cls__init__ = cls.__init__
-    def __init__(self, name, *args, **kwargs) -> None:
-        cls__init__(self, name, *args, **kwargs)
-        self.log_to_db: bool = False
-        self.name_ = name
-        self._handler = logging.StreamHandler(sys.stdout)
-        self._handler.setFormatter(logging.Formatter(fmt=FORMAT))
-        self.addHandler(self._handler)
-    cls.__init__ = __init__
-
-    cls_log = cls._log
-    def _log(self, level: int, msg: str, *args, **kwargs) -> None:
-        cls_log(self, level, msg, *args, **kwargs)
-        fn, lno, func, sinfo = self.findCaller(False, 1)
+def decorate(self, f):
+    def wrapper(level: int, msg: str, *args, **kwargs): 
+        f(level, msg, *args, **kwargs)
 
         if not self.log_to_db:
             return
-        
-        record = [
-            datetime.now(), 
-            logging.getLevelName(level), 
+
+        from .connector import connect, MODELS
+
+        fn, lno, func, sinfo = self.findCaller(False, 1)
+        record: tuple = (
+            datetime.now(),
+            logging.getLevelName(level),
             fn.split('/')[-1].split('.')[0] + '.' + func,
-            *[*msg.split(': ', 1), None][:2]
-        ]
+            *[*msg.split(': ', 1), None][:2],
+        )
         with connect() as con:
             columns = list(MODELS.get('logs').keys())
             schema = ', '.join(columns)
             values = ', '.join(['?'] * len(columns))
-            con.execute('insert into logs (%s) values (%s)' % (schema, values), record)
-    cls._log = _log
-
-    return cls
+            con.execute(
+                'insert into logs (%s) values (%s)' % (schema, values), 
+                record.values()
+            )
+    return wrapper
 
 def getLogger(name):
-    logger = decorate(logging.Logger)(name)
-    logging.root.manager.loggerDict['advertrappr__%s' % name] = logger
+    logger = logging.getLogger(name)
+    logging.basicConfig(**CONFIG)
+    logger.__setattr__('log_to_db', False)
+    logger._log = decorate(logger, logger._log)
     return logger
 
 def updateLoggers(**kwargs):
-    for l in [logging.getLogger(x) for x in logging.root.manager.loggerDict if (
-        x.startswith('advertrappr__')
-    )]:
+    for l in [logging.getLogger(x) for x in logging.root.manager.loggerDict 
+    # if (x.startswith('advertrappr__'))
+    ]:
         for k,v in kwargs.items():
             l.__setattr__(k,v)
+
+def getCommonHandler():
+    _h = None
+    loggers = [logging.getLogger(x) for x in logging.root.manager.loggerDict if (
+        x.startswith('advertrappr__')
+    )]
+    print(loggers)
+    for l in loggers:
+        if l.handlers and not _h:
+            _h = l.handlers[0]
+    if not _h:
+        _h = logging.StreamHandler(sys.stdout)
+        _h.setFormatter(logging.Formatter(fmt=FORMAT))
+    return _h 
+

@@ -1,6 +1,5 @@
-from ..connector import Record
 from ..logger import getLogger
-from ..service import Service
+from ..service import Service, Advert
 from bs4 import BeautifulSoup
 
 
@@ -11,7 +10,7 @@ class Avito(Service):
     url: str = 'https://www.avito.ru'
 
     @staticmethod
-    def parse_avito(soup: BeautifulSoup, limit: int = 10) -> list[Record]:
+    def parse_avito(soup: BeautifulSoup, limit: int = 10) -> list[Advert]:
         results = soup.find_all(
                 'div', {'class': 'iva-item-root-_lk9K'}
         )[:limit][::-1]
@@ -19,7 +18,7 @@ class Avito(Service):
         advs: list[dict] = []
         for x in results:
             try:
-                advs.append(Record(
+                advs.append(Advert(
                     service='avito',
                     id=str(x.get('data-item-id')).strip(),
                     title=x.find(
@@ -48,7 +47,7 @@ class Avito(Service):
                 ))
             except Exception as e:
                 link_invalid = Avito.url + str(x.find('a').get('href')) 
-                advs.append(Record(**{
+                advs.append(Advert(**{
                     'service': Avito.name, 
                     'link': link_
                 }))

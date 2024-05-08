@@ -5,13 +5,8 @@ import os
 import typing as t
 
 
-CREATE: t.Callable = lambda table: 'CREATE OR REPLACE TABLE %(t)s (%(s)s);' % {
-    't': table,
-    's': ', '.join([k + ' ' + v for k,v in MODELS.get(table).items()]),
-}
 MODELS: [str, dict[str, str]] = {
     'advs': {
-        '__processed': 'timestamp',
         'service': 'varchar',
         'id': 'varchar',
         'title': 'varchar',
@@ -22,23 +17,29 @@ MODELS: [str, dict[str, str]] = {
         'link': 'varchar',
     },
     'logs': {
-        '__processed': 'timestamp',
         'level': 'varchar',
         'func': 'varchar',
         'text': 'varchar',
         'args': 'varchar',
     },
 }
-PATH: str = os.path.join(os.path.expanduser('~'), '.advertrappr', 'duck.db')
-Record: type = namedtuple(
-    'Record', 
-     {x for x in MODELS.get('advs').keys() if not x.startswith('__')}, 
-    ### defaults=(None,) * len(ADVS_COLS)
-)
+
+__fields: [str, str] = {
+    '__processed': 'timestamp',
+}
+""" Технические поля: заполнение полей лежит на стороне СУБД """
+
+PATH: str = os.path.join(os.path.expanduser('~'), '.advertrappr')
+
+create_table: t.Callable = lambda table: 'CREATE OR REPLACE TABLE %(t)s (%(s)s);' % {
+    't': table,
+    's': ', '.join([k + ' ' + v for k,v in {**__fields, **MODELS.get(table)}.items()]),
+}
+""" Шорткат для создания таблицы """
 
 @contextmanager
-def connect() -> t.Generator[None, duckdb.DuckDBPyConnection, None]:
-    con = duckdb.connect(PATH)
+def connect(**kwargs) -> t.Generator[None, duckdb.DuckDBPyConnection, None]:
+    con = duckdb.connect(os.path.join(PATH, 'duck.db'), **kwargs)
     try:
         yield con
     finally:
