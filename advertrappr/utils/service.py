@@ -9,7 +9,7 @@ Advert: type = namedtuple(
     'Advert', MODELS.get('advs').keys(), defaults=(None,) * len(MODELS.get('advs')) 
 )
 
-class Service(abc.ABC):
+class Service:
     def __new__(cls, **kwargs) -> Self:
         from . import parsers
         
@@ -24,8 +24,7 @@ class Service(abc.ABC):
         service_object.__init__(**kwargs)
         return service_object
 
-    @staticmethod
-    @abc.abstractmethod
+    @staticmethod 
     def parse(*args, **kwargs) -> list[Advert]:
         """ Парсинг записей из исходного кода """
 

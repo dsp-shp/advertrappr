@@ -24,23 +24,20 @@ MODELS: [str, dict[str, str]] = {
     },
 }
 
-__fields: [str, str] = {
-    '__processed': 'timestamp',
-}
-""" Технические поля: заполнение полей лежит на стороне СУБД """
-
-PATH: str = os.path.join(os.path.expanduser('~'), '.advertrappr')
-
-create_table: t.Callable = lambda table: 'CREATE OR REPLACE TABLE %(t)s (%(s)s);' % {
+getCreateSQL: t.Callable = lambda table: 'CREATE TABLE IF NOT EXISTS %(t)s (%(d)s);' % {
     't': table,
-    's': ', '.join([k + ' ' + v for k,v in {**__fields, **MODELS.get(table)}.items()]),
+    'd': ', '.join([k + ' ' + v for k,v in {
+        **MODELS.get(table),
+        ### Далее следуют технические поля, автоматически заполняемые на стороне СУБД
+        '__processed': 'timestamp default now()', 
+    }.items()]),
 }
-""" Шорткат для создания таблицы """
 
-@contextmanager
-def connect(**kwargs) -> t.Generator[None, duckdb.DuckDBPyConnection, None]:
-    con = duckdb.connect(os.path.join(PATH, 'duck.db'), **kwargs)
-    try:
-        yield con
-    finally:
-        con.close() 
+class connect(duckdb.DuckDBPyConnection):
+    def __new__(
+        cls, 
+        database: str = os.path.join(os.path.expanduser('~'), '.advertrappr', 'duck.db'),
+        read_only: bool = False,
+        **kwargs
+    ) -> duckdb.DuckDBPyConnection:
+        return duckdb.connect(database=database, read_only=read_only)

@@ -1,5 +1,6 @@
-from .utils import getLogger, parsers, connect, Bot
+from .utils import Advert, connect, getLogger, scrape, send_messages 
 from datetime import datetime
+from time import sleep
 import click
 import json
 import os
@@ -9,24 +10,59 @@ import sys
 import typing as t
 
 
+PATH = os.path.join(os.path.expanduser('~'), '.advertrappr')
 logger = getLogger(__name__)
  
 @click.group()
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    pass
+    """
+
+    Function reads or generates (templated) config file, creates necessary entities 
+    and updates job execution context.
+
+    """
+    from .utils.connector import getCreateSQL, MODELS
+    import yaml
+
+    basic_config: dict[str, dict[str, t.Any]] = {
+        'connector': {'database': os.path.join(PATH, 'duck.db')},
+        'messenger': {},
+        'scrapper': {'options': ['--disable-gpu', '--no-sandbox', '--headless']},
+    }
+    config: dict[str, dict[str, t.Any]] | None = None
+    config_path: str = os.path.join(PATH, 'config.yaml')
+    
+    os.makedirs(PATH, exist_ok=True)
+    if not os.path.exists(config_path):
+        logger.warning('Конфигурационный "%s" отсутствует или пуст' % config_path)
+        with open(config_path, 'w') as f:
+            yaml.dump(basic_config, f, default_flow_style=False, allow_unicode=True)
+        logger.info('Записана базовая конфигурация')
+    
+    with open(os.path.join(PATH, 'config.yaml'), 'r') as f:
+        config = yaml.safe_load(f.read())
+    config.get('connector', {'read_only': None}).pop('read_only')
+    ctx.obj = {**{x:{} for x in basic_config}, **config}
+
+    with connect(**ctx.obj['connector']) as con:
+        existing: set[str] = set(con.sql('SHOW TABLES').fetchdf().name)
+        for x in set(MODELS).difference(existing):
+            logger.warning('Не найдена рабочая таблица "%s"' % x)
+            con.sql(getCreateSQL(x))
+            logger.info('Таблица "%s" создана' % x)
 
 @cli.command()
-@click.option('-a', '--avito-url', type=t.Union[str, None], default=None, 
+@click.option('-a', '--avito-url', type=str, default=None, 
     help='Avito search URL')
-@click.option('-c', '--cian-url', type=t.Union[str, None], default=None, 
+@click.option('-c', '--cian-url', type=str, default=None, 
     help='Cian search URL')
-@click.option('-y', '--yandex-url', type=t.Union[str, None], default=None, 
+@click.option('-y', '--yandex-url', type=str, default=None, 
     help='Yandex search URL')
-@click.option('-d', '--dispose', type=t.Union[int, None], default=7,
-    help='Data dispose depth (days, default=7, None for no dispose)')
-@click.option('-r', '--repeat', type=t.Union[int|None], default=None,
-    help='Time to sleep before next search (secs, default=None for no repeat)')
+@click.option('-d', '--dispose', type=int, default=7,
+    help='Data dispose (days, default=7, None for no dispose)')
+@click.option('-r', '--repeat', type=int, default=None,
+    help='Sleep before next search (secs, default=None, None for no repeat)')
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -37,27 +73,92 @@ def run(
     repeat: int | None = None
 ) -> None:
     """ Run advertrappr """
-    pass
+    from .utils.logger import updateLoggers
+    from .utils.service import getService
 
+    logger.info(ctx.obj['messenger'])
+    send_messages('keks', **ctx.obj.get('messenger', {}))
+
+    services: dict[str, str] = {
+        k.replace('_url', ''):v for k,v in locals().items() if v and '_url' in k
+    } ### удаление '_url' подстроки из наименования параметра
+    
+    os.system('pkill chrome') 
+    if not services:
+        logger.error('Не был предоставлен ни один запрос')
+        return
+
+    updateLoggers(log_to_db=True)
+
+    advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
+    with connect(read_only=True, **ctx.obj['connector']) as con:
+        advs_fetched = con.table('advs').fetchdf()
+        if not advs_fetched.empty:
+            advs_stored = advs_fetched[['service', 'id']].drop_duplicates()
+    logger.info('Объявлений хранится: %s' % advs_stored.shape[0])
+     
+    advs: list[Advert] = list()
+    for name, link in services.items():
+        logger.info('Приступаю к скрапингу: %s' % name.capitalize())
+        try:
+            parsed = getService(name).parse(scrape(link, **ctx.obj['scrapper']))
+            stored = set(advs_stored.query('service == "%s"' % name).id)
+            logger.info('Объявлений хранится: %s' % stored)
+            advs += [x for x in parsed if x.id not in stored]
+        except KeyError:
+            logger.error('Отсутствует модуль обработки: %s' % name)
+        except Exception as e:
+            logger.error(e)
+
+    if advs:
+        logger.debug('Новых объявлений отобрано: %s' % len(advs))
+        df = pd.DataFrame(advs)
+        df['__processed'] = datetime.now()
+        with connect(**ctx.obj['connector']) as con:
+            con.sql('INSERT INTO advs SELECT * FROM df')
+            #send(ctx, 'keks')
+            #send(ctx, advs)
+            
+    if repeat:
+        sleep(repeat)
+        run(ctx, avito_url, cian_url, yandex_url, dispsose, repeat)
+    
+    
 @cli.command()
 @click.argument('query', required=True)
+@click.option('-t', '--table', type=bool, default=False, is_flag=True,
+    help='Выборка в табличной форме')
 @click.pass_context
-def fetch(ctx: click.Context, query: str) -> None:
-    """ Execute any query in the database """
-    res: pd.DataFrame | None = None
-    with connect(read_only=True) as con:
-        res = con.execute(query).fetchdf()
-    if not res.empty:
-        logger.info(json.dumps(res.to_dict("records"), indent=4))
+def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
+    """ Fetch any data or execute any query in database """
+    from json import dumps
+
+    with connect(**ctx.obj['connector']) as con:
+        fetched = (con.table if table else con.sql)(query)
+        try:
+            if len(fetched) == 0:
+                logger.info('Пустая выборка')
+                return 
+        except:
+            return
+        
+        if table == False:
+            fetched = dumps(
+                fetched.fetchdf().astype(str).to_dict("records"), 
+                ensure_ascii=False,
+                indent=4, 
+            )
+        else:
+            fetched = '\n%s' % fetched
+
+    logger.info(fetched)
 
 @cli.command()
 @click.argument('message', required=True)
 @click.pass_context
 def send(ctx: click.Context, message: str) -> None:
     """ Send any text message """
-
-    bot = Bot('7036581192:AAHp36vhVhhlzmv1cFPQVpRKm1SvSBXbSzI', '-1002035272908')
-    bot.send_message(message)
+    send_messages(message, **ctx.obj['messenger'])
 
 
 if __name__ in ('__main__'):

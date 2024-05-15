@@ -5,3 +5,4 @@ selenium==4.19.0
 webdriver-manager==4.0.1
 duckdb==0.10.2
 click==8.1.7
+PyYAML

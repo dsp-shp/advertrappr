@@ -68,7 +68,6 @@ class Bot(_Bot):
             'text': Bot.format_text(record),
         }
         try:
-            raise Exception('test')
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             loop.run_until_complete(super().send_message(**kwargs))
@@ -78,4 +77,16 @@ class Bot(_Bot):
     def send_messages(self, texts: list[Advert | str], **kwargs) -> None:
         for x in texts:
             self.send_message(x, **kwargs)
+            if len(texts) == 1:
+                continue
             sleep(kwargs.get('cooldown', 5))
+
+def send_messages(message: t.Any, **kwargs) -> None:
+    if not kwargs:
+        logger.warning('Не задана конфигурация отправки: пропустить уведомление')
+    else:
+        Bot(**kwargs).send_messages(
+            message if (
+                isinstance(message, t.Iterable) and not isinstance(message, str) 
+            ) else [message]
+        )

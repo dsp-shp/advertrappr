@@ -10,7 +10,7 @@ class Avito(Service):
     url: str = 'https://www.avito.ru'
 
     @staticmethod
-    def parse_avito(soup: BeautifulSoup, limit: int = 10) -> list[Advert]:
+    def parse(soup: BeautifulSoup, limit: int = 10) -> list[Advert]:
         results = soup.find_all(
                 'div', {'class': 'iva-item-root-_lk9K'}
         )[:limit][::-1]
@@ -18,7 +18,7 @@ class Avito(Service):
         advs: list[dict] = []
         for x in results:
             try:
-                advs.append(Advert(
+                advert = Advert(
                     service='avito',
                     id=str(x.get('data-item-id')).strip(),
                     title=x.find(
@@ -44,15 +44,19 @@ class Avito(Service):
                         'div', attrs={'class': 'iva-item-descriptionStep-C0ty1'}
                     ).text.replace('\xa0', ' '),
                     link=Avito.url + str(x.find('a').get('href'))
-                ))
+                )
+                advs.append(advert)
+                # logger.info('Добавлено объявление: %s' % advert)
             except Exception as e:
                 link_invalid = Avito.url + str(x.find('a').get('href')) 
                 advs.append(Advert(**{
-                    'service': Avito.name, 
-                    'link': link_
+                    'service': Avito.name,
+                    'id': None,
+                    'link': link_invalid
                 }))
+                raise e
 
-        advs_invalid = [x for x in advs if not x.get('id')]
+        advs_invalid = [x for x in advs if not x.id]
         if advs_invalid:
             logger.error('Ошибки парсинга: %s' % len(advs_invalid))
         return advs
