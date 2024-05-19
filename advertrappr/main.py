@@ -1,4 +1,4 @@
-from .utils import Advert, connect, getLogger, scrape, send_messages 
+from .utils import Advert, connect, getLogger, send_messages
 from datetime import datetime
 from time import sleep
 import click
@@ -77,7 +77,6 @@ def run(
     from .utils.service import getService
 
     logger.info(ctx.obj['messenger'])
-    send_messages('keks', **ctx.obj.get('messenger', {}))
 
     services: dict[str, str] = {
         k.replace('_url', ''):v for k,v in locals().items() if v and '_url' in k
@@ -101,7 +100,7 @@ def run(
     for name, link in services.items():
         logger.info('Приступаю к скрапингу: %s' % name.capitalize())
         try:
-            parsed = getService(name).parse(scrape(link, **ctx.obj['scrapper']))
+            parsed = getService(name).parse(link, **ctx.obj['scrapper'])
             stored = set(advs_stored.query('service == "%s"' % name).id)
             logger.info('Объявлений хранится: %s' % stored)
             advs += [x for x in parsed if x.id not in stored]
@@ -116,8 +115,7 @@ def run(
         df['__processed'] = datetime.now()
         with connect(**ctx.obj['connector']) as con:
             con.sql('INSERT INTO advs SELECT * FROM df')
-            #send(ctx, 'keks')
-            #send(ctx, advs)
+            send_messages(advs, **ctx.obj['messenger'])
             
     if repeat:
         sleep(repeat)
