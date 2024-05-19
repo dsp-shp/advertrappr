@@ -1,1 +1,1 @@
-from .avito import Avito as avito
+from .avito import Avito

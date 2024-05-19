@@ -76,13 +76,12 @@ def run(
     from .utils.logger import updateLoggers
     from .utils.service import getService
 
-    logger.info(ctx.obj['messenger'])
-
     services: dict[str, str] = {
-        k.replace('_url', ''):v for k,v in locals().items() if v and '_url' in k
-    } ### удаление '_url' подстроки из наименования параметра
+        k.replace('_url', '').capitalize():v for k,v in locals().items() if (
+            v and k.endswith('_url')
+        )
+    } ### наименование параметра без 'url' подстроки и с заглавной
     
-    os.system('pkill chrome') 
     if not services:
         logger.error('Не был предоставлен ни один запрос')
         return
@@ -91,26 +90,24 @@ def run(
 
     advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
     with connect(read_only=True, **ctx.obj['connector']) as con:
-        advs_fetched = con.table('advs').fetchdf()
+        advs_fetched = con.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
         if not advs_fetched.empty:
-            advs_stored = advs_fetched[['service', 'id']].drop_duplicates()
+            advs_stored = advs_fetched
     logger.info('Объявлений хранится: %s' % advs_stored.shape[0])
      
     advs: list[Advert] = list()
     for name, link in services.items():
-        logger.info('Приступаю к скрапингу: %s' % name.capitalize())
         try:
             parsed = getService(name).parse(link, **ctx.obj['scrapper'])
-            stored = set(advs_stored.query('service == "%s"' % name).id)
-            logger.info('Объявлений хранится: %s' % stored)
-            advs += [x for x in parsed if x.id not in stored]
+            stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
+            advs += [x for x in parsed if str(x.id) not in stored]
         except KeyError:
             logger.error('Отсутствует модуль обработки: %s' % name)
         except Exception as e:
             logger.error(e)
 
+    logger.info('Новых объявлений отобрано: %s' % len(advs))
     if advs:
-        logger.debug('Новых объявлений отобрано: %s' % len(advs))
         df = pd.DataFrame(advs)
         df['__processed'] = datetime.now()
         with connect(**ctx.obj['connector']) as con:
