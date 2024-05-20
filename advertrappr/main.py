@@ -1,261 +1,161 @@
-from .utils import parsers
-from bs4 import BeautifulSoup
+from .utils import Advert, connect, getLogger, send_messages
 from datetime import datetime
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from sqlalchemy import create_engine, Engine
-from sqlalchemy.sql import text
-###
-import argparse
-import asyncio
-import logging
+from time import sleep
+import click
+import json
 import os
 import pandas as pd
 import re
 import sys
-import telegram
 import typing as t
 
 
-BOT: telegram.Bot
-CHAT_ID: str
-CON_STRING: str
-ENGINE: Engine
-OPTIONS: Options = Options()
-for x in ('--disable-gpu', '--no-sandbox', '--headless',):
-    OPTIONS.add_argument(x)
-MSG_TMP: str =  '⠀\n\
-*%(service_capt)s: [%(title)s]\\(%(link_repl)s\\)*\n\
-⠀\n\
-*%(station)s* [%(location)s]\\(https://2gis.ru/spb/search/Cанкт-Петербург,⠀%(location_repl)s\\)\n\
-_%(price)s_\n\
-⠀\n\
->%(description_repl)s...\n\
-\n⠀'
+PATH = os.path.join(os.path.expanduser('~'), '.advertrappr')
+logger = getLogger(__name__)
+ 
+@click.group()
+@click.pass_context
+def cli(ctx: click.Context) -> None:
+    """
 
-logger = logging.getLogger(__name__)
-
-def prepare(
-    service: str,
-    id: str,
-    title: str,
-    location: str,
-    station: str,
-    price: str,
-    description: str,
-    link: str,
-    **kwargs
-) -> str:
-    """ Подготовка сообщения
-    
-    Идентификатор объявления `id` здесь является маркером корректности парсинга
-    объявления: в случае если `id` отсутствует, можно считать, что объявление
-    обработанно некорректно.
+    Function reads or generates (templated) config file, creates necessary entities 
+    and updates job execution context.
 
     """
-    if id:
-        service_capt = service.capitalize()
-        link_repl = link.replace('_', '\\_')
-        location_repl = location.replace(' ', '⠀')
-        description_repl = re.sub(
-            r'\n[\ |\n|\t]*', ' ', description
-        ).replace('  ', ' ')[:200]
-        text = MSG_TMP % locals()
-    else:
-        text = '⠀\n*Ошибка парсинга:*  %s\n⠀' % link
+    from .utils.connector import getCreateSQL, MODELS
+    import yaml
+
+    basic_config: dict[str, dict[str, t.Any]] = {
+        'connector': {'database': os.path.join(PATH, 'duck.db')},
+        'messenger': {},
+        'scrapper': {'options': ['--disable-gpu', '--no-sandbox', '--headless']},
+    }
+    config: dict[str, dict[str, t.Any]] | None = None
+    config_path: str = os.path.join(PATH, 'config.yaml')
     
-    ### Экранирование сообщения
-    for c in ('.', '-', '+', '(', ')', '!'):
-        text = text.replace(c, '\\' + c)
-    for c in ('\\\\(', '\\\\)'):
-        text = text.replace(c, c[-1])
+    os.makedirs(PATH, exist_ok=True)
+    if not os.path.exists(config_path):
+        logger.warning('Конфигурационный "%s" отсутствует или пуст' % config_path)
+        with open(config_path, 'w') as f:
+            yaml.dump(basic_config, f, default_flow_style=False, allow_unicode=True)
+        logger.info('Записана базовая конфигурация')
     
-    return text
+    with open(os.path.join(PATH, 'config.yaml'), 'r') as f:
+        config = yaml.safe_load(f.read())
+    config.get('connector', {'read_only': None}).pop('read_only')
+    ctx.obj = {**{x:{} for x in basic_config}, **config}
 
-def parse(service: str, link: str, ads: set = set()) -> list[dict]:
-    """ Парсинг данных источника 
+    with connect(**ctx.obj['connector']) as con:
+        existing: set[str] = set(con.sql('SHOW TABLES').fetchdf().name)
+        for x in set(MODELS).difference(existing):
+            logger.warning('Не найдена рабочая таблица "%s"' % x)
+            con.sql(getCreateSQL(x))
+            logger.info('Таблица "%s" создана' % x)
 
-    """
-    driver = None
-
-    parsed_ads: list[dict] = []
-    try:
-        driver = webdriver.Chrome(options=OPTIONS)
-        driver.get(link)
-        source: str = driver.page_source
-        logger.debug('Размер исходного кода страницы: %s' % len(source))
-
-        soup = BeautifulSoup(source, 'html.parser')
-        parsed_ads = vars(parsers).get(service).parse(soup)
-        logger.info('Ошибок парсинга: %s' % len([x for x in parsed_ads if not x.get('id')]))
-
-        new_ads = [x for x in parsed_ads if x.get('id') and x.get('id') not in ads]
-        logger.info('Найдено новых объявлений: %s' % len(new_ads))
-
-        return new_ads
-    except Exception as e:
-        logger.error(e)
-        return []
-    finally:
-        if driver:
-            driver.quit()
-
-async def main(
+@cli.command()
+@click.option('-a', '--avito-url', type=str, default=None, 
+    help='Avito search URL')
+@click.option('-c', '--cian-url', type=str, default=None, 
+    help='Cian search URL')
+@click.option('-y', '--yandex-url', type=str, default=None, 
+    help='Yandex search URL')
+@click.option('-d', '--dispose', type=int, default=7,
+    help='Data dispose (days, default=7, None for no dispose)')
+@click.option('-r', '--repeat', type=int, default=None,
+    help='Sleep before next search (secs, default=None, None for no repeat)')
+@click.pass_context
+def run(
+    ctx: click.Context,
     avito_url: str | None = None,
     cian_url: str | None = None,
-	yandex_url: str | None = None,
-    retention: int = 7,
-    cooldown: int = 90
+    yandex_url: str | None = None,
+    dispose: int | None = 7,
+    repeat: int | None = None
 ) -> None:
+    """ Run advertrappr """
+    from .utils.logger import updateLoggers
+    from .utils.service import getService
+
     services: dict[str, str] = {
-        k.replace('_url', ''):v for k,v in locals().items() if v and '_url' in k
-    } ### корректировка для удаления '_url' подстроки из названия сервиса
+        k.replace('_url', '').capitalize():v for k,v in locals().items() if (
+            v and k.endswith('_url')
+        )
+    } ### наименование параметра без 'url' подстроки и с заглавной
     
-    os.system('pkill chrome') ### завершить все неактуальные процессы
-    ### Если не предоставлен ни один запрос
     if not services:
-        logger.error('Не предоставлен ни один запрос...')
+        logger.error('Не был предоставлен ни один запрос')
         return
 
-    with ENGINE.connect() as con:
-        ### Data retention
-        con.execute(text("""
-            delete from ads 
-            where processed::date < now()::date - %(r)s;
-            delete from dms 
-            where processed::date < now()::date - %(r)s;
-        """ % {'r': retention}))
+    updateLoggers(log_to_db=True)
 
-    while True:
-        df: pd.DataFrame = pd.DataFrame()
-        with ENGINE.connect() as con:
-            ### Выбрать уже имеющиеся в базе данных объявления
-            df = pd.read_sql_table('ads', con=con)
-        ads: list[dict] = []
-        dms: list[dict] = []
-        stored_ads: set[str] = set()
-        for service, link in services.items():
-            stored_ads = {x.strip() for x in df[df.service == service].id if x}
-            logger.debug('Объявлений хранится: %s' % len(stored_ads))
-            ads += parse(service, link, stored_ads)
-       
-        if not ads:
-            await asyncio.sleep(cooldown)
-            continue 
-        
-        ### Сохранить данные
-        with ENGINE.connect() as con:
-            pd.DataFrame(ads).to_sql(
-                'ads', 
-                con=con, 
-                if_exists='append', 
-                index=False
-            )
-        
-        for x in ads:
-            error: str | None = None
-            async with BOT:
-                try:
-                    await BOT.send_message(
-                        text=prepare(**x), 
-                        parse_mode='MarkdownV2', 
-                        chat_id=CHAT_ID, 
-                        disable_web_page_preview=True
-                    ) # type: ignore
-                except Exception as e:
-                    error = str(e)
-                finally:
-                    x['error'] = error
-                    dms.append(x)
-                    await asyncio.sleep(5)
-        
-        ### Залогировать отправку
-        with ENGINE.connect() as con:
-            pd.DataFrame(dms)[['service', 'id', 'link', 'error']].to_sql(
-                'dms', 
-                con=con, 
-                if_exists='append', 
-                index=False
-            )
+    advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
+    with connect(read_only=True, **ctx.obj['connector']) as con:
+        advs_fetched = con.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
+        if not advs_fetched.empty:
+            advs_stored = advs_fetched
+    logger.info('Объявлений хранится: %s' % advs_stored.shape[0])
+     
+    advs: list[Advert] = list()
+    for name, link in services.items():
+        try:
+            parsed = getService(name).parse(link, **ctx.obj['scrapper'])
+            stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
+            advs += [x for x in parsed if str(x.id) not in stored]
+        except KeyError:
+            logger.error('Отсутствует модуль обработки: %s' % name)
+        except Exception as e:
+            logger.error(e)
 
-        await asyncio.sleep(cooldown)
-
-def cli() -> None:
-    """ Команда терминала для захвата объявлений
-
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-a', '--avito-url', type=str, 
-        help='Avito search URL')
-    parser.add_argument('-c', '--cian-url', type=str, 
-        help='Cian search URL')
-    parser.add_argument('--token', type=str, 
-        help='Telegram Bot\' token string')
-    parser.add_argument('--chat-id', type=str, 
-        help='Telegram chat ID')
-    parser.add_argument('--con-string', type=str, 
-        help='Postgres\' connection URI')
-    parser.add_argument('--retention', type=int, default=7, 
-        help='Data retention depth (days, default=7)')
-    parser.add_argument('--cooldown', type=int, default=90, 
-        help='Time to sleep before next search (secs, default=90)')
-    parser.add_argument('--log-output', type=str, default='stdout', 
-        help='Logging output type, default="stdout"')
-    args: dict[str, str] = {k:v for k,v in vars(parser.parse_args()).items() if v}
-
-    ### Инициализация системы логирования
-    log_params: dict[str, t.Any] = {
-        'level': logging.INFO,
-        'format': '%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-        'datefmt': '%Y-%m-%d %H:%M:%S'
-    }
-    log_output: str = args.pop('log_output')
-    if log_output == 'file':
-        log_dir = os.path.join(os.path.expanduser('~'), '.advertrappr')
-        os.makedirs(os.path.join(log_dir), exist_ok=True)
-        log_output = os.path.join(log_dir, 'out.log')
-        with open(log_output, 'w') as f: f.write('')
-        log_params['filename'] = log_output
-    elif log_output == 'stdout':
-        log_output = log_output.upper()
-    else:
-        raise Exception('Способ логирования - "%s" неизвестен' % log_output)
-    logging.basicConfig(**log_params)
-    logging.info('Инициализировано логирование в %s' % log_output)
-   
-    ### Определение параметров подключения к внешним сервисам
-    global BOT, CHAT_ID, CON_STRING, ENGINE 
-    BOT = telegram.Bot(token=args.pop('token'))
-    CHAT_ID = args.pop('chat_id')
-    CON_STRING = args.pop('con_string')
-    ENGINE = create_engine(CON_STRING, isolation_level="AUTOCOMMIT")
+    logger.info('Новых объявлений отобрано: %s' % len(advs))
+    if advs:
+        df = pd.DataFrame(advs)
+        df['__processed'] = datetime.now()
+        with connect(**ctx.obj['connector']) as con:
+            con.sql('INSERT INTO advs SELECT * FROM df')
+            send_messages(advs, **ctx.obj['messenger'])
+            
+    if repeat:
+        sleep(repeat)
+        run(ctx, avito_url, cian_url, yandex_url, dispose, repeat)
+i
     
-    with ENGINE.connect() as con: ### ициниализация необходимых объектов
-        con.execute(text("""
-            create table if not exists ads (
-                service varchar,
-                id varchar,
-                title varchar,
-                location varchar,
-                station varchar,
-                price varchar,
-                description varchar,
-                link varchar,
-                processed timestamp default now() + interval '3 hour'
-            );
+    
+@cli.command()
+@click.argument('query', required=True)
+@click.option('-t', '--table', type=bool, default=False, is_flag=True,
+    help='Выборка в табличной форме')
+@click.pass_context
+def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
+    """ Fetch any data or execute any query in database """
+    from json import dumps
 
-            create table if not exists dms (
-                service varchar,
-                id varchar,
-                link varchar,
-                error varchar,
-                processed timestamp default now() + interval '3 hour'
-            );
-        """))
+    with connect(**ctx.obj['connector']) as con:
+        fetched = (con.table if table else con.sql)(query)
+        try:
+            if len(fetched) == 0:
+                logger.info('Пустая выборка')
+                return 
+        except:
+            return
+        
+        if table == False:
+            fetched = dumps(
+                fetched.fetchdf().astype(str).to_dict("records"), 
+                ensure_ascii=False,
+                indent=4, 
+            )
+        else:
+            fetched = '\n%s' % fetched
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main(**args))
+    logger.info(fetched)
+
+@cli.command()
+@click.argument('message', required=True)
+@click.pass_context
+def send(ctx: click.Context, message: str) -> None:
+    """ Send any text message """
+    send_messages(message, **ctx.obj['messenger'])
 
 
 if __name__ in ('__main__'):
-    sys.exit(cli())
+    sys.exit(cli)
