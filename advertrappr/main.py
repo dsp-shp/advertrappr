@@ -109,9 +109,9 @@ def config(
     help='Cian search URL')
 @click.option('-y', '--yandex-url', type=str, default=None, 
     help='Yandex search URL')
-@click.option('-d', '--dispose', type=int, default=7,
+@click.option('-d', '--dispose', type=str, default='7',
     help='Data dispose (days, default=7, None for no dispose)')
-@click.option('-r', '--repeat', type=int, default=None,
+@click.option('-r', '--repeat', type=str, default=None,
     help='Sleep before next search (secs, default=None, None for no repeat)')
 @click.pass_context
 def run(
@@ -119,8 +119,8 @@ def run(
     avito_url: str | None = None,
     cian_url: str | None = None,
     yandex_url: str | None = None,
-    dispose: int | None = 7,
-    repeat: int | None = None
+    dispose: str | None = 7,
+    repeat: str | None = None
 ) -> None:
     """ Run advertrappr """
     from .utils.logger import updateLoggers
