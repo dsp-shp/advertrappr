@@ -1,6 +1,7 @@
 from .utils import Advert, connect, getLogger, getService, send_messages
 from datetime import datetime
 from time import sleep
+from yaml import dump, safe_load
 import click
 import json
 import os
@@ -10,7 +11,8 @@ import sys
 import typing as t
 
 
-PATH = os.path.join(os.path.expanduser('~'), '.advertrappr')
+PATH: str = os.path.join(os.path.expanduser('~'), '.advertrappr')
+CONFIG_PATH: str = os.path.join(PATH, 'config.yaml')
 logger = getLogger(__name__)
  
 @click.group()
@@ -23,26 +25,26 @@ def cli(ctx: click.Context) -> None:
 
     """
     from .utils.connector import getCreateSQL, MODELS
-    from yaml import dump, safe_load
 
     basic_config: dict[str, dict[str, t.Any]] = {
-        'connector': {'database': os.path.join(PATH, 'duck.db'), 'read_only': None},
+        'connector': {'database': os.path.join(PATH, 'duck.db')},
         'messenger': {},
         'scrapper': {'options': ['--disable-gpu', '--no-sandbox', '--headless']},
+        'parsers': {},
     }
     config: dict[str, dict[str, t.Any]] | None = None
-    config_path: str = os.path.join(PATH, 'config.yaml')
     
     os.makedirs(PATH, exist_ok=True)
-    if not os.path.exists(config_path):
-        logger.warning('Конфигурационный "%s" отсутствует или пуст' % config_path)
-        with open(config_path, 'w') as f:
+    if not os.path.exists(CONFIG_PATH):
+        logger.warning('Конфигурационный "%s" отсутствует или пуст' % CONFIG_PATH)
+        with open(CONFIG_PATH, 'w') as f:
             dump(basic_config, f, default_flow_style=False, allow_unicode=True)
         logger.info('Записана базовая конфигурация')
     
-    with open(os.path.join(PATH, 'config.yaml'), 'r') as f:
+    with open(CONFIG_PATH, 'r') as f:
         config = safe_load(f.read())
-    config.get('connector', {'read_only': None}).pop('read_only')
+    if config.get('connector') and 'read_only' in config['connector']: ### параметр определяется вручную
+        config['connector'].pop('read_only')
     ctx.obj = {**{x:{} for x in basic_config}, **config}
 
     with connect(**ctx.obj['connector']) as con:
@@ -52,6 +54,54 @@ def cli(ctx: click.Context) -> None:
             con.sql(getCreateSQL(x))
             logger.info('Таблица "%s" создана' % x)
 
+@cli.command()
+@click.option('-c', '--connector', type=str, default=None,
+    help='Database-related string configuration dump')
+@click.option('-m', '--messenger', type=str, default=None,
+    help='Telegram-related string configuration dump')
+@click.option('-s', '--scrapper', type=str, default=None,
+    help='Website scrapping string configuration dump')
+@click.option('-p', '--parsers', type=str, default=None,
+    help='Source code parsing string configuration dump')
+@click.pass_context
+def config(
+    ctx: click.Context,
+    connector: str | None = None,
+    messenger: str | None = None,
+    scrapper: str | None = None,
+    parsers: str | None = None
+) -> None:
+    """ Configuration update """
+    from copy import deepcopy
+
+    new_config: dict[str, dict] = {
+        'connector': {} if str(connector).strip() in ('None', '',) else json.loads(connector),
+        'messenger': {} if str(messenger).strip() in ('None', '',) else json.loads(messenger),
+        'scrapper': {} if str(scrapper).strip() in ('None', '',) else json.loads(scrapper),
+        'parsers': {} if str(parsers).strip() in ('None', '',) else json.loads(parsers),
+    }
+
+    if not any([k for k,v in new_config.items() if v]):
+        logger.info('Конфигурация не нуждается в обновлении: пустая конфигурация')
+        return
+
+    with open(CONFIG_PATH, 'r') as f:
+        config = safe_load(f.read())
+    config_copy = deepcopy(config)
+
+    for k,v in new_config.items():
+        if not v or config.get(k, {}) == v:
+            continue
+        config[k] = v
+        logger.info('Обновлена конфигурация для "%s": %s' % (k, str(v)))
+    
+    if config_copy == config:
+        logger.info('Конфигурация не нуждается в обновлении: идентичная конфигурация')
+        return
+    
+    with open(CONFIG_PATH, 'w') as f:
+        dump(config, f, default_flow_style=False, allow_unicode=True)
+    
 @cli.command()
 @click.option('-a', '--avito-url', type=str, default=None, 
     help='Avito search URL')
@@ -99,7 +149,10 @@ def run(
     advs: list[Advert] = list()
     for name, link in services.items():
         try:
-            parsed = getService(name).parse(link, **ctx.obj['scrapper'])
+            parsed = getService(name).parse(link, **{
+                **ctx.obj['scrapper'],
+                **ctx.obj['parsers'].get(name, {}),
+            })
             stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
             advs += [x for x in parsed if str(x.id) not in stored]
         except KeyError:
@@ -126,7 +179,6 @@ def run(
 @click.pass_context
 def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
     """ Fetch any data or execute any query in database """
-    from json import dumps
 
     with connect(**ctx.obj['connector']) as con:
         fetched = (con.table if table else con.sql)(query)
@@ -138,7 +190,7 @@ def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
             return
         
         if table == False:
-            fetched = dumps(
+            fetched = json.dumps(
                 fetched.fetchdf().astype(str).to_dict("records"), 
                 ensure_ascii=False,
                 indent=4, 
