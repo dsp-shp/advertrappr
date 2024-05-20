@@ -26,7 +26,7 @@ def cli(ctx: click.Context) -> None:
     from yaml import dump, safe_load
 
     basic_config: dict[str, dict[str, t.Any]] = {
-        'connector': {'database': os.path.join(PATH, 'duck.db')},
+        'connector': {'database': os.path.join(PATH, 'duck.db'), 'read_only': None},
         'messenger': {},
         'scrapper': {'options': ['--disable-gpu', '--no-sandbox', '--headless']},
     }
