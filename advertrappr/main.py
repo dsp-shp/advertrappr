@@ -1,4 +1,4 @@
-from .utils import Advert, connect, getLogger, send_messages
+from .utils import Advert, connect, getLogger, getService, send_messages
 from datetime import datetime
 from time import sleep
 import click
@@ -23,7 +23,7 @@ def cli(ctx: click.Context) -> None:
 
     """
     from .utils.connector import getCreateSQL, MODELS
-    import yaml
+    from yaml import dump, safe_load
 
     basic_config: dict[str, dict[str, t.Any]] = {
         'connector': {'database': os.path.join(PATH, 'duck.db')},
@@ -37,11 +37,11 @@ def cli(ctx: click.Context) -> None:
     if not os.path.exists(config_path):
         logger.warning('Конфигурационный "%s" отсутствует или пуст' % config_path)
         with open(config_path, 'w') as f:
-            yaml.dump(basic_config, f, default_flow_style=False, allow_unicode=True)
+            dump(basic_config, f, default_flow_style=False, allow_unicode=True)
         logger.info('Записана базовая конфигурация')
     
     with open(os.path.join(PATH, 'config.yaml'), 'r') as f:
-        config = yaml.safe_load(f.read())
+        config = safe_load(f.read())
     config.get('connector', {'read_only': None}).pop('read_only')
     ctx.obj = {**{x:{} for x in basic_config}, **config}
 
@@ -74,8 +74,9 @@ def run(
 ) -> None:
     """ Run advertrappr """
     from .utils.logger import updateLoggers
-    from .utils.service import getService
 
+    dispose: int | None = int(dispose) if str(dispose) != 'None' else None
+    repeat: int | None = int(repeat) if str(repeat) != 'None' else None
     services: dict[str, str] = {
         k.replace('_url', '').capitalize():v for k,v in locals().items() if (
             v and k.endswith('_url')
