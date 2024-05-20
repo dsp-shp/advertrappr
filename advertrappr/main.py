@@ -116,7 +116,8 @@ def run(
             
     if repeat:
         sleep(repeat)
-        run(ctx, avito_url, cian_url, yandex_url, dispsose, repeat)
+        run(ctx, avito_url, cian_url, yandex_url, dispose, repeat)
+i
     
     
 @cli.command()
