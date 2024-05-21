@@ -75,10 +75,10 @@ def config(
     from copy import deepcopy
 
     new_config: dict[str, dict] = {
-        'connector': {} if str(connector).strip() in ('None', '',) else json.loads(connector),
-        'messenger': {} if str(messenger).strip() in ('None', '',) else json.loads(messenger),
-        'scrapper': {} if str(scrapper).strip() in ('None', '',) else json.loads(scrapper),
-        'parsers': {} if str(parsers).strip() in ('None', '',) else json.loads(parsers),
+        'connector': {} if str(connector).strip() in ('None', '', '{}') else json.loads(connector),
+        'messenger': {} if str(messenger).strip() in ('None', '', '{}') else json.loads(messenger),
+        'scrapper': {} if str(scrapper).strip() in ('None', '', '{}') else json.loads(scrapper),
+        'parsers': {} if str(parsers).strip() in ('None', '', '{}') else json.loads(parsers),
     }
 
     if not any([k for k,v in new_config.items() if v]):
@@ -139,38 +139,39 @@ def run(
 
     updateLoggers(log_to_db=True)
 
-    advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
-    with connect(read_only=True, **ctx.obj['connector']) as con:
-        advs_fetched = con.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
-        if not advs_fetched.empty:
-            advs_stored = advs_fetched
-    logger.info('Объявлений хранится: %s' % advs_stored.shape[0])
-     
-    advs: list[Advert] = list()
-    for name, link in services.items():
-        try:
-            parsed = getService(name).parse(link, **{
-                **ctx.obj['scrapper'],
-                **ctx.obj['parsers'].get(name, {}),
-            })
-            stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
-            advs += [x for x in parsed if str(x.id) not in stored]
-        except KeyError:
-            logger.error('Отсутствует модуль обработки: %s' % name)
-        except Exception as e:
-            logger.error(e)
+    while True:
+        advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
+        with connect(read_only=True, **ctx.obj['connector']) as con:
+            advs_fetched = con.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
+            if not advs_fetched.empty:
+                advs_stored = advs_fetched
+        logger.info('Объявлений хранится: %s' % advs_stored.shape[0])
+         
+        advs: list[Advert] = list()
+        for name, link in services.items():
+            try:
+                parsed = getService(name).parse(link, **{
+                    **ctx.obj['scrapper'],
+                    **ctx.obj['parsers'].get(name, {}),
+                })
+                stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
+                advs += [x for x in parsed if str(x.id) not in stored]
+            except KeyError:
+                logger.error('Отсутствует модуль обработки: %s' % name)
+            except Exception as e:
+                logger.error(e)
 
-    logger.info('Новых объявлений отобрано: %s' % len(advs))
-    if advs:
-        df = pd.DataFrame(advs)
-        df['__processed'] = datetime.now()
-        with connect(**ctx.obj['connector']) as con:
-            con.sql('INSERT INTO advs SELECT * FROM df')
-            send_messages(advs, **ctx.obj['messenger'])
-            
-    if repeat:
+        logger.info('Новых объявлений отобрано: %s' % len(advs))
+        if advs:
+            df = pd.DataFrame(advs)
+            df['__processed'] = datetime.now()
+            with connect(**ctx.obj['connector']) as con:
+                con.sql('INSERT INTO advs SELECT * FROM df')
+                send_messages(advs, **ctx.obj['messenger'])
+                
+        if not repeat:
+            return
         sleep(repeat)
-        run(ctx, avito_url, cian_url, yandex_url, dispose, repeat)
     
 @cli.command()
 @click.argument('query', required=True)
