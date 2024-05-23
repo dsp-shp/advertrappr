@@ -12,6 +12,7 @@ import typing as t
 
 
 PATH: str = os.path.join(os.path.expanduser('~'), '.advertrappr')
+TEMPLATES_PATH: str = os.path.join(PATH, 'templates')
 CONFIG_PATH: str = os.path.join(PATH, 'config.yaml')
 logger = getLogger(__name__)
  
@@ -25,10 +26,12 @@ def cli(ctx: click.Context) -> None:
 
     """
     from .utils.connector import getCreateSQL, MODELS
+    from .utils.messenger import TEMPLATES as basic_templates
+    from jinja2 import Environment, FileSystemLoader
 
     basic_config: dict[str, dict[str, t.Any]] = {
         'connector': {'database': os.path.join(PATH, 'duck.db')},
-        'messenger': {},
+        'messenger': {'cooldown': 5, 'disable_web_page_preview': True, 'parse_mode': 'HTML'},
         'scrapper': {'options': ['--disable-gpu', '--no-sandbox', '--headless']},
         'parsers': {},
     }
@@ -40,12 +43,29 @@ def cli(ctx: click.Context) -> None:
         with open(CONFIG_PATH, 'w') as f:
             dump(basic_config, f, default_flow_style=False, allow_unicode=True)
         logger.info('Записана базовая конфигурация')
+
+    os.makedirs(TEMPLATES_PATH, exist_ok=True)
+    for k,v in filter(
+        lambda x: x[0] + '.md' not in os.listdir(TEMPLATES_PATH), 
+        basic_templates.items()
+
+    ):
+        logger.warning('Не найден шаблон отправки: %s.md' % k)
+        with open(os.path.join(TEMPLATES_PATH, k + '.md'), 'w') as f:
+            f.write(v)
+        logger.info('Создан базовый шаблон отправки')
     
     with open(CONFIG_PATH, 'r') as f:
         config = safe_load(f.read())
-    if config.get('connector') and 'read_only' in config['connector']: ### параметр определяется вручную
+    config = {**{x:{} for x in basic_config}, **config}
+
+    if 'read_only' in config['connector']: ### read_only параметр определяется вручную
         config['connector'].pop('read_only')
-    ctx.obj = {**{x:{} for x in basic_config}, **config}
+    env = Environment(loader=FileSystemLoader(TEMPLATES_PATH)) ### добавить шаблоны отправки
+    config['messenger']['templates'] = {
+        x: env.get_template(x + '.md') for x in basic_templates
+    }
+    ctx.obj = config
 
     with connect(**ctx.obj['connector']) as con:
         existing: set[str] = set(con.sql('SHOW TABLES').fetchdf().name)
@@ -92,7 +112,7 @@ def config(
     for k,v in new_config.items():
         if not v or config.get(k, {}) == v:
             continue
-        config[k] = v
+        config[k] = {**config[k], **v}
         logger.info('Обновлена конфигурация для "%s": %s' % (k, str(v)))
     
     if config_copy == config:
