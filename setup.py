@@ -13,6 +13,7 @@ setup(
     author_email='dsp_shp@icloud.com',
     license='MIT License',
     packages=find_packages(),
+    setup_requires=['setuptools_scm'],
     include_package_data=True,
     entry_points={
         "console_scripts": [
