@@ -3,8 +3,6 @@ import logging
 import sys
 import typing as t
 
-from advertrappr.settings import settings
-
 
 LOG_CONFIG: dict[str, t.Any] = {
     'level': logging.INFO,
@@ -18,15 +16,19 @@ class DBHandler(logging.Handler):
         super().__init__(level)
 
     def emit(self, record: logging.LogRecord) -> None:
+        from advertrappr.settings import settings
+
         try:
-            with settings.connect() as con:
-                con.table('logs').insert((
+            settings.conn.execute(
+                'INSERT INTO logs (level, func, text, args, __processed) VALUES (?, ?, ?, ?, ?)',
+                [
                     record.levelname,
                     f'{record.module}.{record.funcName}',
                     record.getMessage(),
                     str(record.args) if record.args else '',
                     datetime.now(),
-                ))
+                ],
+            )
         except Exception:
             self.handleError(record)
 
@@ -44,10 +46,7 @@ def getLogger(name: str) -> logging.Logger:
     return logger
 
 
-def addDBHandler(logger: logging.Logger | None = None) -> None:
-    targets = [logger] if logger else [
-        logging.getLogger(n) for n in logging.root.manager.loggerDict
-    ]
-    for l in targets:
+def addDBHandler() -> None:
+    for l in [logging.getLogger(n) for n in logging.root.manager.loggerDict]:
         if not any(isinstance(h, DBHandler) for h in l.handlers):
             l.addHandler(DBHandler())

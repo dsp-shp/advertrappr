@@ -1,12 +1,9 @@
 from datetime import datetime
-from pathlib import Path
 from time import sleep
-from yaml import dump, safe_load
 import click
 import json
 import pandas as pd
 import sys
-import typing as t
 
 from advertrappr.settings import Settings, settings
 from advertrappr.utils import Advert, getLogger, getService, send_messages
@@ -19,49 +16,7 @@ logger = getLogger(__name__)
 @click.group()
 @click.pass_context
 def cli(ctx: click.Context) -> None:
-    """
-    Read or generate config file, create necessary entities
-    and update job execution context.
-    """
-    from jinja2 import Environment, FileSystemLoader
-
-    config: dict[str, dict[str, t.Any]] | None = None
-
-    Settings.base_dir.mkdir(parents=True, exist_ok=True)
-    if not Settings.config_path.exists():
-        logger.warning('Config "%s" not found or empty', Settings.config_path)
-        with open(Settings.config_path, 'w') as f:
-            dump(Settings.default_config, f, default_flow_style=False, allow_unicode=True)
-        logger.info('Default config written')
-
-    Settings.templates_dir.mkdir(parents=True, exist_ok=True)
-    existing_templates = {p.name for p in Settings.templates_dir.iterdir()}
-    for name, content in basic_templates.items():
-        if f'{name}.md' not in existing_templates:
-            logger.warning('Template not found: %s.md', name)
-            with open(Settings.templates_dir / f'{name}.md', 'w') as f:
-                f.write(content)
-            logger.info('Default template created')
-
-    with open(Settings.config_path, 'r') as f:
-        config = safe_load(f.read())
-    config = {**{x: {} for x in Settings.default_config}, **config}
-
-    if 'read_only' in config['connector']:
-        config['connector'].pop('read_only')
-    env = Environment(loader=FileSystemLoader(str(Settings.templates_dir)))
-    config['messenger']['templates'] = {
-        x: env.get_template(x + '.md') for x in basic_templates
-    }
-    ctx.obj = config
-
-    with settings.connect(**ctx.obj['connector']) as con:
-        existing: set[str] = set(con.sql('SHOW TABLES').fetchdf().name)
-        for name, sql in Settings.create_tables.items():
-            if name not in existing:
-                logger.warning('Working table "%s" not found', name)
-                con.execute(sql)
-                logger.info('Table "%s" created', name)
+    ctx.obj = settings
 
 
 @cli.command()
@@ -103,18 +58,17 @@ def run(
 
     while True:
         advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
-        with settings.connect(read_only=True, **ctx.obj['connector']) as con:
-            advs_fetched = con.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
-            if not advs_fetched.empty:
-                advs_stored = advs_fetched
+        result = settings.conn.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
+        if not result.empty:
+            advs_stored = result
         logger.info('Adverts stored: %s', advs_stored.shape[0])
 
         advs: list[Advert] = list()
         for name, link in services.items():
             try:
                 parsed = getService(name).parse(link, **{
-                    **ctx.obj['scrapper'],
-                    **ctx.obj['parsers'].get(name, {}),
+                    **settings['scrapper'],
+                    **settings['parsers'].get(name, {}),
                 })
                 stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
                 advs += [x for x in parsed if str(x.id) not in stored]
@@ -127,9 +81,8 @@ def run(
         if advs:
             df = pd.DataFrame(advs)
             df['__processed'] = datetime.now()
-            with settings.connect(**ctx.obj['connector']) as con:
-                con.sql('INSERT INTO advs SELECT * FROM df')
-                send_messages(advs, **ctx.obj['messenger'])
+            settings.conn.sql('INSERT INTO advs SELECT * FROM df')
+            send_messages(advs, **settings['messenger'])
 
         if not repeat:
             return
@@ -144,25 +97,23 @@ def run(
 def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
     """Fetch any data or execute any query in database"""
 
-    with settings.connect(**ctx.obj['connector']) as con:
-        fetched = (con.table if table else con.sql)(query)
-        try:
-            if len(fetched) == 0:
-                logger.info('Empty result set')
-                return
-        except:
+    fetched = (settings.conn.table if table else settings.conn.sql)(query)
+    try:
+        if len(fetched) == 0:
             return
+    except:
+        return
 
-        if not table:
-            fetched = json.dumps(
-                fetched.fetchdf().astype(str).to_dict("records"),
-                ensure_ascii=False,
-                indent=4,
-            )
-        else:
-            fetched = '\n%s' % fetched
+    if not table:
+        fetched = json.dumps(
+            fetched.fetchdf().astype(str).to_dict("records"),
+            ensure_ascii=False,
+            indent=4,
+        )
+    else:
+        fetched = '\n%s' % fetched
 
-    logger.info(fetched)
+    print(fetched)
 
 
 @cli.command()
@@ -170,8 +121,8 @@ def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
 @click.pass_context
 def send(ctx: click.Context, message: str) -> None:
     """Send any text message"""
-    send_messages(message, **ctx.obj['messenger'])
+    send_messages(message, **settings['messenger'])
 
 
 if __name__ in ('__main__'):
-    sys.exit(cli)
+    sys.exit(cli())

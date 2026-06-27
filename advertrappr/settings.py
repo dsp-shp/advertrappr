@@ -1,5 +1,6 @@
-from contextlib import contextmanager
 from pathlib import Path
+from yaml import dump, safe_load
+from jinja2 import Environment, FileSystemLoader
 import duckdb
 import typing as t
 
@@ -57,21 +58,46 @@ class Settings:
         'parsers': {},
     }
 
-    @staticmethod
-    @contextmanager
-    def connect(
-        database: str | None = None,
-        read_only: bool = False,
-        **kwargs
-    ):
-        conn = duckdb.connect(
-            database or str(Settings.database_path),
-            read_only=read_only,
+    def __init__(self):
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.templates_dir.mkdir(parents=True, exist_ok=True)
+
+        if not self.config_path.exists():
+            with open(self.config_path, 'w') as f:
+                dump(self.default_config, f, default_flow_style=False, allow_unicode=True)
+
+        from advertrappr.utils.messenger import TEMPLATES as basic_templates
+
+        existing = {p.name for p in self.templates_dir.iterdir()}
+        for name, content in basic_templates.items():
+            if f'{name}.md' not in existing:
+                with open(self.templates_dir / f'{name}.md', 'w') as f:
+                    f.write(content)
+
+        with open(self.config_path) as f:
+            config = safe_load(f.read())
+        config = {**{x: {} for x in self.default_config}, **config}
+        config['connector'].pop('read_only', None)
+
+        env = Environment(loader=FileSystemLoader(str(self.templates_dir)))
+        config['messenger']['templates'] = {
+            x: env.get_template(f'{x}.md') for x in basic_templates
+        }
+        self.config = config
+
+        self.conn = duckdb.connect(
+            config['connector'].get('database', str(self.database_path)),
+            read_only=False,
         )
-        try:
-            yield conn
-        finally:
-            conn.close()
+
+        for sql in self.create_tables.values():
+            self.conn.execute(sql)
+
+    def __getitem__(self, key):
+        return self.config[key]
+
+    def __setitem__(self, key, value):
+        self.config[key] = value
 
 
 settings = Settings()
