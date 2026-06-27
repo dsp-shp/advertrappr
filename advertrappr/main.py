@@ -1,13 +1,16 @@
 from datetime import datetime
-from time import sleep
+from urllib.parse import urlparse
 import click
 import json
-import pandas as pd
+import time
+import typing as t
 import sys
 
-from advertrappr.settings import Settings, settings
-from advertrappr.utils import Advert, getLogger, getService, send_messages
-from advertrappr.utils.messenger import TEMPLATES as basic_templates
+import pandas as pd
+
+from advertrappr.settings import settings
+from advertrappr.utils import Advert, get_service, send_messages
+from advertrappr.utils.logger import getLogger
 
 
 logger = getLogger(__name__)
@@ -20,34 +23,23 @@ def cli(ctx: click.Context) -> None:
 
 
 @cli.command()
-@click.option('-a', '--avito-url', type=str, default=None,
-    help='Avito search URL')
-@click.option('-c', '--cian-url', type=str, default=None,
-    help='Cian search URL')
-@click.option('-y', '--yandex-url', type=str, default=None,
-    help='Yandex search URL')
-@click.option('-d', '--dispose', type=str, default='7',
+@click.option('-d', '--dispose', type=int, default=7,
     help='Data dispose (days, default=7, None for no dispose)')
-@click.option('-r', '--repeat', type=str, default=None,
+@click.option('-r', '--repeat', type=int, default=None,
     help='Sleep before next search (secs, default=None, None for no repeat)')
+@click.argument("urls", help='List of URLs to scrape', nargs=-1)
 @click.pass_context
 def run(
     ctx: click.Context,
-    avito_url: str | None = None,
-    cian_url: str | None = None,
-    yandex_url: str | None = None,
-    dispose: str | None = 7,
-    repeat: str | None = None
+    dispose: t.Optional[int],
+    repeat: t.Optional[int],
+    urls: tuple[str]
 ) -> None:
     """Run advertrappr"""
     from advertrappr.utils.logger import addDBHandler
 
-    dispose: int | None = int(dispose) if str(dispose) != 'None' else None
-    repeat: int | None = int(repeat) if str(repeat) != 'None' else None
     services: dict[str, str] = {
-        k.replace('_url', '').capitalize(): v for k, v in locals().items() if (
-            v and k.endswith('_url')
-        )
+        x: (urlparse(x).netloc.split('.')[-2]).capitalize() for x in urls
     }
 
     if not services:
@@ -58,22 +50,24 @@ def run(
 
     while True:
         advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
-        result = settings.conn.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
+        result = settings.db_conn.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
         if not result.empty:
             advs_stored = result
         logger.info('Adverts stored: %s', advs_stored.shape[0])
 
         advs: list[Advert] = list()
-        for name, link in services.items():
+        for url, service_name in services.items():
             try:
-                parsed = getService(name).parse(link, **{
+                parsed = get_service(service_name).parse(url, **{
                     **settings['scrapper'],
-                    **settings['parsers'].get(name, {}),
+                    **settings['parsers'].get(service_name, {}),
                 })
-                stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
+                stored = set(advs_stored.query(
+                    'service == "%s"' % service_name
+                ).id)
                 advs += [x for x in parsed if str(x.id) not in stored]
             except KeyError:
-                logger.error('Missing service module: %s', name)
+                logger.error('Missing service module: %s', service_name)
             except Exception as e:
                 logger.error(e)
 
@@ -81,12 +75,12 @@ def run(
         if advs:
             df = pd.DataFrame(advs)
             df['__processed'] = datetime.now()
-            settings.conn.sql('INSERT INTO advs SELECT * FROM df')
+            settings.db_conn.sql('INSERT INTO advs SELECT * FROM df')
             send_messages(advs, **settings['messenger'])
 
         if not repeat:
             return
-        sleep(repeat)
+        time.sleep(repeat)
 
 
 @cli.command()
@@ -97,7 +91,7 @@ def run(
 def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
     """Fetch any data or execute any query in database"""
 
-    fetched = (settings.conn.table if table else settings.conn.sql)(query)
+    fetched = (settings.db_conn.table if table else settings.db_conn.sql)(query)
     try:
         if len(fetched) == 0:
             return
@@ -113,7 +107,7 @@ def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
     else:
         fetched = '\n%s' % fetched
 
-    print(fetched)
+    logger.info(fetched)
 
 
 @cli.command()

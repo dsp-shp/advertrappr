@@ -11,21 +11,17 @@ from advertrappr.utils.logger import getLogger
 
 
 _TEMPLATES_DIR = Path(__file__).parent / 'templates'
-with open(_TEMPLATES_DIR / 'valid.md') as valid, \
-     open(_TEMPLATES_DIR / 'invalid.md') as invalid:
-    TEMPLATES = {'valid': valid.read(), 'invalid': invalid.read()}
+with open(_TEMPLATES_DIR / 'valid.md') as f:
+    _VALID = f.read()
+with open(_TEMPLATES_DIR / 'invalid.md') as f:
+    _INVALID = f.read()
 
 logger = getLogger(__name__)
 
 
 class Bot(_Bot):
-    _temp_valid: Template
-    _temp_invalid: Template
-
-    def __init__(self, token: str, temps: dict = {}) -> None:
-        super().__init__(token)
-        self._temp_valid = temps.get('valid') or Template(TEMPLATES['valid'])
-        self._temp_invalid = temps.get('invalid') or Template(TEMPLATES['invalid'])
+    _temp_valid = Template(_VALID)
+    _temp_invalid = Template(_INVALID)
 
     def format_record(self, record: Advert | str) -> str:
         _repl: t.Callable = lambda x: re.sub(r'\n[\ |\n|\t]*', ' ', x)[:200]
@@ -71,8 +67,7 @@ def send_messages(message: t.Any, **kwargs) -> None:
     if not ('token' in kwargs and 'chat_id' in kwargs):
         logger.warning('Messenger config not set: skip notification')
     else:
-        templates = kwargs.pop('templates') if kwargs.get('templates') else {}
-        Bot(kwargs.pop('token'), templates).send_messages(
+        Bot(kwargs.pop('token')).send_messages(
             message if (
                 isinstance(message, t.Iterable) and not isinstance(message, str)
             ) else [message], **kwargs

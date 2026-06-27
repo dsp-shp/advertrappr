@@ -1,97 +1,51 @@
 from pathlib import Path
-from yaml import dump, safe_load
-from jinja2 import Environment, FileSystemLoader
-import duckdb
 import typing as t
+
+from jinja2 import Environment, FileSystemLoader
+from yaml import dump, safe_load
+import duckdb
 
 
 class Settings:
-    base_dir = Path.home() / '.cache' / 'advertrappr'
-    templates_dir = base_dir / 'templates'
-    config_path = base_dir / 'config.yaml'
-    database_path = base_dir / 'duck.db'
-
-    adv_columns = [
-        'service', 'id', 'title', 'location', 'station',
-        'price', 'description', 'link',
-    ]
-
-    log_columns = [
-        'level', 'func', 'text', 'args',
-    ]
-
-    create_advs_table = """CREATE TABLE IF NOT EXISTS advs (
-        service varchar,
-        id varchar,
-        title varchar,
-        location varchar,
-        station varchar,
-        price varchar,
-        description varchar,
-        link varchar,
-        __processed timestamp default now()
-    );"""
-
-    create_logs_table = """CREATE TABLE IF NOT EXISTS logs (
-        level varchar,
-        func varchar,
-        text varchar,
-        args varchar,
-        __processed timestamp default now()
-    );"""
-
-    create_tables: dict[str, str] = {
-        'advs': create_advs_table,
-        'logs': create_logs_table,
-    }
-
-    default_config: dict[str, dict[str, t.Any]] = {
-        'connector': {'database': str(database_path)},
+    base_path = Path.home() / '.cache' / 'advertrappr'
+    temp_path = base_path / 'templates'
+    config_path = base_path / 'config.yaml'
+    config: dict[str, t.Any]
+    config_default: dict[str, t.Any] = {
         'messenger': {
-            'cooldown': 5,
-            'disable_web_page_preview': True,
-            'parse_mode': 'HTML',
+            'cooldown': 5, 'disable_web_page_preview': True, 'parse_mode': 'HTML',
         },
         'scrapper': {
             'options': ['--disable-gpu', '--no-sandbox', '--headless'],
         },
         'parsers': {},
     }
+    db_path = base_path / 'duck.db'
+    db_conn: duckdb.DuckDBPyConnection
 
     def __init__(self):
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        self.base_path.mkdir(parents=True, exist_ok=True)
+        self.temp_path.mkdir(parents=True, exist_ok=True)
 
         if not self.config_path.exists():
-            with open(self.config_path, 'w') as f:
-                dump(self.default_config, f, default_flow_style=False, allow_unicode=True)
+            self.config_path.write_text(dump(
+                self.config_default,
+                default_flow_style=False,
+                allow_unicode=True,
+            ))
 
-        from advertrappr.utils.messenger import TEMPLATES as basic_templates
-
-        existing = {p.name for p in self.templates_dir.iterdir()}
-        for name, content in basic_templates.items():
-            if f'{name}.md' not in existing:
-                with open(self.templates_dir / f'{name}.md', 'w') as f:
-                    f.write(content)
-
-        with open(self.config_path) as f:
-            config = safe_load(f.read())
-        config = {**{x: {} for x in self.default_config}, **config}
-        config['connector'].pop('read_only', None)
-
-        env = Environment(loader=FileSystemLoader(str(self.templates_dir)))
-        config['messenger']['templates'] = {
-            x: env.get_template(f'{x}.md') for x in basic_templates
+        self.config = {
+            **{x: {} for x in self.config_default},
+            **safe_load(self.config_path.read_text()),
         }
-        self.config = config
 
-        self.conn = duckdb.connect(
-            config['connector'].get('database', str(self.database_path)),
-            read_only=False,
-        )
-
-        for sql in self.create_tables.values():
-            self.conn.execute(sql)
+        self.db_conn = duckdb.connect(str(self.db_path), False)
+        from advertrappr.utils import Advert, Log
+        for x in (Advert, Log):
+            self.db_conn.execute("CREATE TABLE IF NOT EXISTS %s (%s)" % (
+                x.__name__.lower()[:3] + "s",
+                ' TEXT, '.join([*x.__annotations__.keys(), '__processed TIMESTAMP DEFAULT now()']),
+            ))
 
     def __getitem__(self, key):
         return self.config[key]

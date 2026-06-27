@@ -1,14 +1,21 @@
 from datetime import datetime
+from dataclasses import dataclass, fields
+
 import logging
 import sys
 import typing as t
 
 
-LOG_CONFIG: dict[str, t.Any] = {
-    'level': logging.INFO,
-    'datefmt': '%Y-%m-%d %H:%M:%S',
-    'format': '%(asctime)s.%(msecs)03d - %(levelname)s - %(module)s.%(funcName)s: %(message)s',
-}
+LOG_FORMAT = '%(asctime)s.%(msecs)03d - %(levelname)s - %(module)s.%(funcName)s: %(message)s'
+LOG_DATEFMT = '%Y-%m-%d %H:%M:%S'
+
+
+@dataclass
+class Log:
+    level: str
+    func: str
+    text: str
+    args: str
 
 
 class DBHandler(logging.Handler):
@@ -19,14 +26,16 @@ class DBHandler(logging.Handler):
         from advertrappr.settings import settings
 
         try:
-            settings.conn.execute(
-                'INSERT INTO logs (level, func, text, args, __processed) VALUES (?, ?, ?, ?, ?)',
+            settings.db_conn.execute(
+                'INSERT INTO logs (%s) VALUES (%s)' % (
+                    ', '.join(f.name for f in fields(Log)),
+                    ', '.join(['?'] * len(fields(Log))),
+                ),
                 [
                     record.levelname,
                     f'{record.module}.{record.funcName}',
                     record.getMessage(),
                     str(record.args) if record.args else '',
-                    datetime.now(),
                 ],
             )
         except Exception:
@@ -36,12 +45,9 @@ class DBHandler(logging.Handler):
 def getLogger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if not logger.handlers:
-        logger.setLevel(LOG_CONFIG['level'])
+        logger.setLevel(logging.INFO)
         handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter(
-            fmt=LOG_CONFIG['format'],
-            datefmt=LOG_CONFIG['datefmt'],
-        ))
+        handler.setFormatter(logging.Formatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT))
         logger.addHandler(handler)
     return logger
 

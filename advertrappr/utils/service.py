@@ -1,30 +1,35 @@
 from abc import ABC, abstractmethod
-from bs4 import BeautifulSoup, element
-from collections import namedtuple
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+from dataclasses import dataclass
+
 import os
 import typing as t
 
-from advertrappr.settings import Settings
+from bs4 import BeautifulSoup, element
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+
 from advertrappr.utils.logger import getLogger
 
-
-Advert: type = namedtuple(
-    'Advert', Settings.adv_columns, defaults=(None,) * len(Settings.adv_columns)
-)
-
-OPTIONS: Options = Options()
 
 logger = getLogger(__name__)
 
 
+@dataclass
+class Advert:
+    service: str
+    id: str
+    title: str
+    location: str
+    station: str
+    price: str
+    description: str
+    link: str
+
+
 def format_string(str_or_tag: str | element.Tag, *args, **kwargs) -> str | None:
-    if isinstance(str_or_tag, str):
-        _ = str_or_tag
-    else:
-        _ = str_or_tag.text
-    return _.replace('\xa0', ' ').strip()
+    return (
+        str_or_tag if isinstance(str_or_tag, str) else str_or_tag.text
+    ).replace('\xa0', ' ').strip()
 
 
 def ensure_format(func: t.Callable) -> t.Callable:
@@ -87,12 +92,13 @@ class Service(ABC):
         options: list[str] = ['--disable-gpu', '--no-sandbox', '--headless'],
         **kwargs
     ) -> BeautifulSoup:
+        chrome_opts = Options()
         for x in options:
-            OPTIONS.add_argument(x)
+            chrome_opts.add_argument(x)
 
         driver: webdriver.Chrome | None = None
         try:
-            driver = webdriver.Chrome(options=OPTIONS)
+            driver = webdriver.Chrome(options=chrome_opts)
             driver.get(link)
 
             source: str = driver.page_source
@@ -123,7 +129,7 @@ class Service(ABC):
         return advs
 
 
-def getService(service: str, **kwargs) -> Service:
+def get_service(service: str, **kwargs) -> Service:
     from advertrappr.utils import services
 
     service_cls = vars(services).get(service)
