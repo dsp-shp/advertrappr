@@ -1,1 +1,1 @@
-from .avito import Avito
+from advertrappr.utils.services.avito import Avito

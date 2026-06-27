@@ -1,67 +1,63 @@
-from .utils import Advert, connect, getLogger, getService, send_messages
 from datetime import datetime
+from pathlib import Path
 from time import sleep
 from yaml import dump, safe_load
 import click
 import json
-import os
 import pandas as pd
-import re
 import sys
 import typing as t
 
+from advertrappr.settings import (
+    BASE_DIR,
+    CONFIG_PATH,
+    DEFAULT_CONFIG,
+    MODELS,
+    TEMPLATES_DIR,
+    getCreateSQL,
+)
+from advertrappr.utils import Advert, connect, getLogger, getService, send_messages
+from advertrappr.utils.messenger import TEMPLATES as basic_templates
 
-PATH: str = os.path.join(os.path.expanduser('~'), '.advertrappr')
-TEMPLATES_PATH: str = os.path.join(PATH, 'templates')
-CONFIG_PATH: str = os.path.join(PATH, 'config.yaml')
+
 logger = getLogger(__name__)
- 
+
+
 @click.group()
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """
-
-    Function reads or generates (templated) config file, creates necessary entities 
-    and updates job execution context.
-
+    Read or generate config file, create necessary entities
+    and update job execution context.
     """
-    from .utils.connector import getCreateSQL, MODELS
-    from .utils.messenger import TEMPLATES as basic_templates
+    from advertrappr.settings import DATABASE_PATH
     from jinja2 import Environment, FileSystemLoader
 
-    basic_config: dict[str, dict[str, t.Any]] = {
-        'connector': {'database': os.path.join(PATH, 'duck.db')},
-        'messenger': {'cooldown': 5, 'disable_web_page_preview': True, 'parse_mode': 'HTML'},
-        'scrapper': {'options': ['--disable-gpu', '--no-sandbox', '--headless']},
-        'parsers': {},
-    }
     config: dict[str, dict[str, t.Any]] | None = None
-    
-    os.makedirs(PATH, exist_ok=True)
-    if not os.path.exists(CONFIG_PATH):
-        logger.warning('Конфигурационный "%s" отсутствует или пуст' % CONFIG_PATH)
+
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    if not CONFIG_PATH.exists():
+        logger.warning('Config "%s" not found or empty', CONFIG_PATH)
         with open(CONFIG_PATH, 'w') as f:
-            dump(basic_config, f, default_flow_style=False, allow_unicode=True)
-        logger.info('Записана базовая конфигурация')
+            dump(DEFAULT_CONFIG, f, default_flow_style=False, allow_unicode=True)
+        logger.info('Default config written')
 
-    os.makedirs(TEMPLATES_PATH, exist_ok=True)
-    for k,v in filter(
-        lambda x: x[0] + '.md' not in os.listdir(TEMPLATES_PATH), 
-        basic_templates.items()
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+    existing_templates = {p.name for p in TEMPLATES_DIR.iterdir()}
+    for name, content in basic_templates.items():
+        if f'{name}.md' not in existing_templates:
+            logger.warning('Template not found: %s.md', name)
+            with open(TEMPLATES_DIR / f'{name}.md', 'w') as f:
+                f.write(content)
+            logger.info('Default template created')
 
-    ):
-        logger.warning('Не найден шаблон отправки: %s.md' % k)
-        with open(os.path.join(TEMPLATES_PATH, k + '.md'), 'w') as f:
-            f.write(v)
-        logger.info('Создан базовый шаблон отправки')
-    
     with open(CONFIG_PATH, 'r') as f:
         config = safe_load(f.read())
-    config = {**{x:{} for x in basic_config}, **config}
+    config = {**{x: {} for x in DEFAULT_CONFIG}, **config}
 
-    if 'read_only' in config['connector']: ### read_only параметр определяется вручную
+    if 'read_only' in config['connector']:
         config['connector'].pop('read_only')
-    env = Environment(loader=FileSystemLoader(TEMPLATES_PATH)) ### добавить шаблоны отправки
+    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
     config['messenger']['templates'] = {
         x: env.get_template(x + '.md') for x in basic_templates
     }
@@ -70,64 +66,17 @@ def cli(ctx: click.Context) -> None:
     with connect(**ctx.obj['connector']) as con:
         existing: set[str] = set(con.sql('SHOW TABLES').fetchdf().name)
         for x in set(MODELS).difference(existing):
-            logger.warning('Не найдена рабочая таблица "%s"' % x)
+            logger.warning('Working table "%s" not found', x)
             con.sql(getCreateSQL(x))
-            logger.info('Таблица "%s" создана' % x)
+            logger.info('Table "%s" created', x)
+
 
 @cli.command()
-@click.option('-c', '--connector', type=str, default=None,
-    help='Database-related string configuration dump')
-@click.option('-m', '--messenger', type=str, default=None,
-    help='Telegram-related string configuration dump')
-@click.option('-s', '--scrapper', type=str, default=None,
-    help='Website scrapping string configuration dump')
-@click.option('-p', '--parsers', type=str, default=None,
-    help='Source code parsing string configuration dump')
-@click.pass_context
-def config(
-    ctx: click.Context,
-    connector: str | None = None,
-    messenger: str | None = None,
-    scrapper: str | None = None,
-    parsers: str | None = None
-) -> None:
-    """ Configuration update """
-    from copy import deepcopy
-
-    new_config: dict[str, dict] = {
-        'connector': {} if str(connector).strip() in ('None', '', '{}') else json.loads(connector),
-        'messenger': {} if str(messenger).strip() in ('None', '', '{}') else json.loads(messenger),
-        'scrapper': {} if str(scrapper).strip() in ('None', '', '{}') else json.loads(scrapper),
-        'parsers': {} if str(parsers).strip() in ('None', '', '{}') else json.loads(parsers),
-    }
-
-    if not any([k for k,v in new_config.items() if v]):
-        logger.info('Конфигурация не нуждается в обновлении: пустая конфигурация')
-        return
-
-    with open(CONFIG_PATH, 'r') as f:
-        config = safe_load(f.read())
-    config_copy = deepcopy(config)
-
-    for k,v in new_config.items():
-        if not v or config.get(k, {}) == v:
-            continue
-        config[k] = {**config[k], **v}
-        logger.info('Обновлена конфигурация для "%s": %s' % (k, str(v)))
-    
-    if config_copy == config:
-        logger.info('Конфигурация не нуждается в обновлении: идентичная конфигурация')
-        return
-    
-    with open(CONFIG_PATH, 'w') as f:
-        dump(config, f, default_flow_style=False, allow_unicode=True)
-    
-@cli.command()
-@click.option('-a', '--avito-url', type=str, default=None, 
+@click.option('-a', '--avito-url', type=str, default=None,
     help='Avito search URL')
-@click.option('-c', '--cian-url', type=str, default=None, 
+@click.option('-c', '--cian-url', type=str, default=None,
     help='Cian search URL')
-@click.option('-y', '--yandex-url', type=str, default=None, 
+@click.option('-y', '--yandex-url', type=str, default=None,
     help='Yandex search URL')
 @click.option('-d', '--dispose', type=str, default='7',
     help='Data dispose (days, default=7, None for no dispose)')
@@ -142,22 +91,22 @@ def run(
     dispose: str | None = 7,
     repeat: str | None = None
 ) -> None:
-    """ Run advertrappr """
-    from .utils.logger import updateLoggers
+    """Run advertrappr"""
+    from advertrappr.utils.logger import addDBHandler
 
     dispose: int | None = int(dispose) if str(dispose) != 'None' else None
     repeat: int | None = int(repeat) if str(repeat) != 'None' else None
     services: dict[str, str] = {
-        k.replace('_url', '').capitalize():v for k,v in locals().items() if (
+        k.replace('_url', '').capitalize(): v for k, v in locals().items() if (
             v and k.endswith('_url')
         )
-    } ### наименование параметра без 'url' подстроки и с заглавной
-    
+    }
+
     if not services:
-        logger.error('Не был предоставлен ни один запрос')
+        logger.error('No URL was provided')
         return
 
-    updateLoggers(log_to_db=True)
+    addDBHandler()
 
     while True:
         advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
@@ -165,8 +114,8 @@ def run(
             advs_fetched = con.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
             if not advs_fetched.empty:
                 advs_stored = advs_fetched
-        logger.info('Объявлений хранится: %s' % advs_stored.shape[0])
-         
+        logger.info('Adverts stored: %s', advs_stored.shape[0])
+
         advs: list[Advert] = list()
         for name, link in services.items():
             try:
@@ -177,55 +126,57 @@ def run(
                 stored = set(advs_stored.query('service == "%s"' % name.capitalize()).id)
                 advs += [x for x in parsed if str(x.id) not in stored]
             except KeyError:
-                logger.error('Отсутствует модуль обработки: %s' % name)
+                logger.error('Missing service module: %s', name)
             except Exception as e:
                 logger.error(e)
 
-        logger.info('Новых объявлений отобрано: %s' % len(advs))
+        logger.info('New adverts selected: %s', len(advs))
         if advs:
             df = pd.DataFrame(advs)
             df['__processed'] = datetime.now()
             with connect(**ctx.obj['connector']) as con:
                 con.sql('INSERT INTO advs SELECT * FROM df')
                 send_messages(advs, **ctx.obj['messenger'])
-                
+
         if not repeat:
             return
         sleep(repeat)
-    
+
+
 @cli.command()
 @click.argument('query', required=True)
 @click.option('-t', '--table', type=bool, default=False, is_flag=True,
-    help='Выборка в табличной форме')
+    help='Output in table form')
 @click.pass_context
 def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
-    """ Fetch any data or execute any query in database """
+    """Fetch any data or execute any query in database"""
 
     with connect(**ctx.obj['connector']) as con:
         fetched = (con.table if table else con.sql)(query)
         try:
             if len(fetched) == 0:
-                logger.info('Пустая выборка')
-                return 
+                logger.info('Empty result set')
+                return
         except:
             return
-        
-        if table == False:
+
+        if not table:
             fetched = json.dumps(
-                fetched.fetchdf().astype(str).to_dict("records"), 
+                fetched.fetchdf().astype(str).to_dict("records"),
                 ensure_ascii=False,
-                indent=4, 
+                indent=4,
             )
         else:
             fetched = '\n%s' % fetched
 
     logger.info(fetched)
 
+
 @cli.command()
 @click.argument('message', required=True)
 @click.pass_context
 def send(ctx: click.Context, message: str) -> None:
-    """ Send any text message """
+    """Send any text message"""
     send_messages(message, **ctx.obj['messenger'])
 
 

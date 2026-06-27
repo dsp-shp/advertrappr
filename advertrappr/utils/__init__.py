@@ -1,5 +1,4 @@
-from .service import Advert, getService
-from .connector import connect
-from .logger import getLogger
-from .messenger import send_messages
-
+from advertrappr.utils.service import Advert, getService
+from advertrappr.utils.connector import connect
+from advertrappr.utils.logger import getLogger
+from advertrappr.utils.messenger import send_messages

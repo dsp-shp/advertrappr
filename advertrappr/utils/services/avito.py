@@ -1,18 +1,20 @@
-from ..logger import getLogger
-from ..service import Advert, Service, format_string
 from bs4 import BeautifulSoup, element
 import typing as t
+
+from advertrappr.utils.service import Advert, Service, format_string
+from advertrappr.utils.logger import getLogger
 
 
 logger = getLogger(__name__)
 
+
 class Avito(Service):
     name: str = 'Avito'
     link: str = 'https://www.avito.ru'
-    
+
     @staticmethod
     def _get_service(x: element.Tag | None = None) -> str:
-        return Avito.name 
+        return Avito.name
 
     @staticmethod
     def _get_id(x: element.Tag) -> str:
@@ -20,7 +22,7 @@ class Avito(Service):
 
     @staticmethod
     def _get_title(x: element.Tag) -> str:
-        return x.find('div', attrs={'class':'iva-item-titleStep-pdebR'}).find('a')
+        return x.find('div', attrs={'class': 'iva-item-titleStep-pdebR'}).find('a')
 
     @staticmethod
     def _get_location(x: element.Tag) -> str:
@@ -50,7 +52,7 @@ class Avito(Service):
 
     @staticmethod
     def scrape(link: str, *args, **kwargs) -> BeautifulSoup:
-        logger.info('Приступаю к скраппингу')
+        logger.info('Starting scraping')
         return Service.scrape(link, *args, **kwargs)
 
     @staticmethod
@@ -60,10 +62,10 @@ class Avito(Service):
         elif isinstance(link_or_soup, BeautifulSoup):
             soup = link_or_soup
         else:
-            raise Exception('Необходима ссылка или суп исходного кода')
+            raise Exception('URL or BeautifulSoup required')
 
         tags = soup.find_all('div', {'class': 'iva-item-root-_lk9K'})[:limit][::-1]
         return Service.parse(
             tags,
-            {k.split('_', 2)[-1]:v for k,v in vars(Avito).items() if k.startswith('_get_')}
+            {k.split('_', 2)[-1]: v for k, v in vars(Avito).items() if k.startswith('_get_')}
         )

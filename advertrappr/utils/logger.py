@@ -1,51 +1,53 @@
 from datetime import datetime
 import logging
-import typing as t
 import sys
+import typing as t
+
+from advertrappr.utils.connector import connect
 
 
-CONFIG: dict[str, t.Any] = {
+LOG_CONFIG: dict[str, t.Any] = {
     'level': logging.INFO,
     'datefmt': '%Y-%m-%d %H:%M:%S',
-    'format': '%(asctime)s.%(msecs)03d - %(levelname)s - %(module)s.%(funcName)s: %(message)s'
+    'format': '%(asctime)s.%(msecs)03d - %(levelname)s - %(module)s.%(funcName)s: %(message)s',
 }
 
-def decorate(self, f):
-    def wrapper(level: int, msg: str, *args, **kwargs): 
-        f(level, msg, *args, **kwargs)
 
-        if not self.log_to_db:
-            return
+class DBHandler(logging.Handler):
+    def __init__(self, level: int = logging.NOTSET) -> None:
+        super().__init__(level)
 
-        from .connector import connect, MODELS
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            with connect() as con:
+                con.table('logs').insert((
+                    record.levelname,
+                    f'{record.module}.{record.funcName}',
+                    record.getMessage(),
+                    str(record.args) if record.args else '',
+                    datetime.now(),
+                ))
+        except Exception:
+            self.handleError(record)
 
-        fn, lno, func, sinfo = self.findCaller(False, 1)
-        record: tuple = (
-            logging.getLevelName(level),
-            fn.split('/')[-1].split('.')[0] + '.' + func,
-            *[*(msg.split(': ', 1) if not isinstance(msg, Exception) else (str(msg), None)), None][:2],
-            datetime.now(),
-        )
-        with connect() as con:
-            con.table('logs').insert(record)
-            
-    return wrapper
 
-def getLogger(name):
+def getLogger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
-    logging.basicConfig(**CONFIG)
-    logger.__setattr__('log_to_db', False)
-    logger._log = decorate(logger, logger._log)
+    if not logger.handlers:
+        logger.setLevel(LOG_CONFIG['level'])
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter(
+            fmt=LOG_CONFIG['format'],
+            datefmt=LOG_CONFIG['datefmt'],
+        ))
+        logger.addHandler(handler)
     return logger
 
-def updateLoggers(**kwargs):
-    """ Обновление логгеров
 
-    Функция обновляет все логгеры, указанные в loggerDict словаре корневого менеджера.
-    Так, например, функцией задается процесс логирования в базу данных: 
-        updateLogger(log_to_db = True)
-
-    """
-    for l in [logging.getLogger(x) for x in logging.root.manager.loggerDict]:
-        for k,v in kwargs.items():
-            l.__setattr__(k,v)
+def addDBHandler(logger: logging.Logger | None = None) -> None:
+    targets = [logger] if logger else [
+        logging.getLogger(n) for n in logging.root.manager.loggerDict
+    ]
+    for l in targets:
+        if not any(isinstance(h, DBHandler) for h in l.handlers):
+            l.addHandler(DBHandler())

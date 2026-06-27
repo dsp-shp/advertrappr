@@ -1,3 +1,3 @@
 ⠀<br>
-<b>Ошибка парсинга:</b> {{link}}<br>
+<b>Parsing error:</b> {{link}}<br>
 ⠀

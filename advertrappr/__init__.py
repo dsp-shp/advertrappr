@@ -1,2 +1,1 @@
-from .main import cli
-
+from advertrappr.main import cli
