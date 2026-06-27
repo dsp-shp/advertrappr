@@ -8,15 +8,8 @@ import pandas as pd
 import sys
 import typing as t
 
-from advertrappr.settings import (
-    BASE_DIR,
-    CONFIG_PATH,
-    DEFAULT_CONFIG,
-    MODELS,
-    TEMPLATES_DIR,
-    getCreateSQL,
-)
-from advertrappr.utils import Advert, connect, getLogger, getService, send_messages
+from advertrappr.settings import Settings, settings
+from advertrappr.utils import Advert, getLogger, getService, send_messages
 from advertrappr.utils.messenger import TEMPLATES as basic_templates
 
 
@@ -30,45 +23,45 @@ def cli(ctx: click.Context) -> None:
     Read or generate config file, create necessary entities
     and update job execution context.
     """
-    from advertrappr.settings import DATABASE_PATH
     from jinja2 import Environment, FileSystemLoader
 
     config: dict[str, dict[str, t.Any]] | None = None
 
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
-    if not CONFIG_PATH.exists():
-        logger.warning('Config "%s" not found or empty', CONFIG_PATH)
-        with open(CONFIG_PATH, 'w') as f:
-            dump(DEFAULT_CONFIG, f, default_flow_style=False, allow_unicode=True)
+    Settings.base_dir.mkdir(parents=True, exist_ok=True)
+    if not Settings.config_path.exists():
+        logger.warning('Config "%s" not found or empty', Settings.config_path)
+        with open(Settings.config_path, 'w') as f:
+            dump(Settings.default_config, f, default_flow_style=False, allow_unicode=True)
         logger.info('Default config written')
 
-    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-    existing_templates = {p.name for p in TEMPLATES_DIR.iterdir()}
+    Settings.templates_dir.mkdir(parents=True, exist_ok=True)
+    existing_templates = {p.name for p in Settings.templates_dir.iterdir()}
     for name, content in basic_templates.items():
         if f'{name}.md' not in existing_templates:
             logger.warning('Template not found: %s.md', name)
-            with open(TEMPLATES_DIR / f'{name}.md', 'w') as f:
+            with open(Settings.templates_dir / f'{name}.md', 'w') as f:
                 f.write(content)
             logger.info('Default template created')
 
-    with open(CONFIG_PATH, 'r') as f:
+    with open(Settings.config_path, 'r') as f:
         config = safe_load(f.read())
-    config = {**{x: {} for x in DEFAULT_CONFIG}, **config}
+    config = {**{x: {} for x in Settings.default_config}, **config}
 
     if 'read_only' in config['connector']:
         config['connector'].pop('read_only')
-    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+    env = Environment(loader=FileSystemLoader(str(Settings.templates_dir)))
     config['messenger']['templates'] = {
         x: env.get_template(x + '.md') for x in basic_templates
     }
     ctx.obj = config
 
-    with connect(**ctx.obj['connector']) as con:
+    with settings.connect(**ctx.obj['connector']) as con:
         existing: set[str] = set(con.sql('SHOW TABLES').fetchdf().name)
-        for x in set(MODELS).difference(existing):
-            logger.warning('Working table "%s" not found', x)
-            con.sql(getCreateSQL(x))
-            logger.info('Table "%s" created', x)
+        for name, sql in Settings.create_tables.items():
+            if name not in existing:
+                logger.warning('Working table "%s" not found', name)
+                con.execute(sql)
+                logger.info('Table "%s" created', name)
 
 
 @cli.command()
@@ -110,7 +103,7 @@ def run(
 
     while True:
         advs_stored: pd.DataFrame = pd.DataFrame(columns=['service', 'id'])
-        with connect(read_only=True, **ctx.obj['connector']) as con:
+        with settings.connect(read_only=True, **ctx.obj['connector']) as con:
             advs_fetched = con.sql('SELECT DISTINCT service, id FROM advs').fetchdf()
             if not advs_fetched.empty:
                 advs_stored = advs_fetched
@@ -134,7 +127,7 @@ def run(
         if advs:
             df = pd.DataFrame(advs)
             df['__processed'] = datetime.now()
-            with connect(**ctx.obj['connector']) as con:
+            with settings.connect(**ctx.obj['connector']) as con:
                 con.sql('INSERT INTO advs SELECT * FROM df')
                 send_messages(advs, **ctx.obj['messenger'])
 
@@ -151,7 +144,7 @@ def run(
 def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
     """Fetch any data or execute any query in database"""
 
-    with connect(**ctx.obj['connector']) as con:
+    with settings.connect(**ctx.obj['connector']) as con:
         fetched = (con.table if table else con.sql)(query)
         try:
             if len(fetched) == 0:

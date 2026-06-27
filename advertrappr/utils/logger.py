@@ -3,7 +3,7 @@ import logging
 import sys
 import typing as t
 
-from advertrappr.utils.connector import connect
+from advertrappr.settings import settings
 
 
 LOG_CONFIG: dict[str, t.Any] = {
@@ -19,7 +19,7 @@ class DBHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            with connect() as con:
+            with settings.connect() as con:
                 con.table('logs').insert((
                     record.levelname,
                     f'{record.module}.{record.funcName}',

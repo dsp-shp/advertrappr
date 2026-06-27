@@ -6,12 +6,12 @@ from selenium.webdriver.chrome.options import Options
 import os
 import typing as t
 
-from advertrappr.settings import MODELS
+from advertrappr.settings import Settings
 from advertrappr.utils.logger import getLogger
 
 
 Advert: type = namedtuple(
-    'Advert', MODELS.get('advs').keys(), defaults=(None,) * len(MODELS.get('advs'))
+    'Advert', Settings.adv_columns, defaults=(None,) * len(Settings.adv_columns)
 )
 
 OPTIONS: Options = Options()

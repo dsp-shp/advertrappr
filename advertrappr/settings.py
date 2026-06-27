@@ -1,42 +1,77 @@
+from contextlib import contextmanager
 from pathlib import Path
+import duckdb
 import typing as t
 
 
-BASE_DIR = Path.home() / '.cache' / 'advertrappr'
-TEMPLATES_DIR = BASE_DIR / 'templates'
-CONFIG_PATH = BASE_DIR / 'config.yaml'
-DATABASE_PATH = BASE_DIR / 'duck.db'
+class Settings:
+    base_dir = Path.home() / '.cache' / 'advertrappr'
+    templates_dir = base_dir / 'templates'
+    config_path = base_dir / 'config.yaml'
+    database_path = base_dir / 'duck.db'
 
-MODELS: dict[str, dict[str, str]] = {
-    'advs': {
-        'service': 'varchar',
-        'id': 'varchar',
-        'title': 'varchar',
-        'location': 'varchar',
-        'station': 'varchar',
-        'price': 'varchar',
-        'description': 'varchar',
-        'link': 'varchar',
-    },
-    'logs': {
-        'level': 'varchar',
-        'func': 'varchar',
-        'text': 'varchar',
-        'args': 'varchar',
-    },
-}
+    adv_columns = [
+        'service', 'id', 'title', 'location', 'station',
+        'price', 'description', 'link',
+    ]
 
-getCreateSQL = lambda table: 'CREATE TABLE IF NOT EXISTS %(t)s (%(d)s);' % {
-    't': table,
-    'd': ', '.join([f'{k} {v}' for k, v in {
-        **MODELS.get(table, {}),
-        '__processed': 'timestamp default now()',
-    }.items()]),
-}
+    log_columns = [
+        'level', 'func', 'text', 'args',
+    ]
 
-DEFAULT_CONFIG: dict[str, dict[str, t.Any]] = {
-    'connector': {'database': str(DATABASE_PATH)},
-    'messenger': {'cooldown': 5, 'disable_web_page_preview': True, 'parse_mode': 'HTML'},
-    'scrapper': {'options': ['--disable-gpu', '--no-sandbox', '--headless']},
-    'parsers': {},
-}
+    create_advs_table = """CREATE TABLE IF NOT EXISTS advs (
+        service varchar,
+        id varchar,
+        title varchar,
+        location varchar,
+        station varchar,
+        price varchar,
+        description varchar,
+        link varchar,
+        __processed timestamp default now()
+    );"""
+
+    create_logs_table = """CREATE TABLE IF NOT EXISTS logs (
+        level varchar,
+        func varchar,
+        text varchar,
+        args varchar,
+        __processed timestamp default now()
+    );"""
+
+    create_tables: dict[str, str] = {
+        'advs': create_advs_table,
+        'logs': create_logs_table,
+    }
+
+    default_config: dict[str, dict[str, t.Any]] = {
+        'connector': {'database': str(database_path)},
+        'messenger': {
+            'cooldown': 5,
+            'disable_web_page_preview': True,
+            'parse_mode': 'HTML',
+        },
+        'scrapper': {
+            'options': ['--disable-gpu', '--no-sandbox', '--headless'],
+        },
+        'parsers': {},
+    }
+
+    @staticmethod
+    @contextmanager
+    def connect(
+        database: str | None = None,
+        read_only: bool = False,
+        **kwargs
+    ):
+        conn = duckdb.connect(
+            database or str(Settings.database_path),
+            read_only=read_only,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+settings = Settings()
