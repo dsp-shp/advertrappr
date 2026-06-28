@@ -31,7 +31,7 @@ class Avito(Service):
     @staticmethod
     def _get_station(x: element.Tag) -> str:
         try:
-            return [*Avito.__get_geo(x).children][1]
+            return 'м. ' + [*Avito.__get_geo(x).children][1]
         except:
             return ""
 
