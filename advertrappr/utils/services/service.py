@@ -106,12 +106,6 @@ class Service(ABC):
         options: list[str] = ['--disable-gpu', '--no-sandbox', '--headless'],
         **kwargs
     ) -> BeautifulSoup:
-        from advertrappr.settings import Settings
-        from datetime import datetime
-        cache_path = Settings.cache_path / str(datetime.now().date())
-        cache_path.mkdir(parents=True, exist_ok=True)
-
-        return BeautifulSoup((Settings.cache_path / str(datetime.now().date()) / "test.html").read_text(), 'lxml')
         chrome_opts = Options()
         for x in options:
             chrome_opts.add_argument(x)
@@ -123,10 +117,6 @@ class Service(ABC):
 
             source: str = driver.page_source
             logger.info('Page source size: %s', len(source))
-
-            (Settings.cache_path / str(datetime.now().date()) / "test.html").write_text(
-                source
-            )
 
             return BeautifulSoup(source, 'lxml')
         except Exception as e:
