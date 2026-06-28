@@ -1,20 +1,16 @@
 from bs4 import BeautifulSoup, element
 import typing as t
-
-from advertrappr.utils.service import Advert, Service, format_string
+import json
+from advertrappr.utils.services.service import Advert, Service, format_string
 from advertrappr.utils.logger import getLogger
-
 
 logger = getLogger(__name__)
 
 
 class Avito(Service):
-    name: str = 'Avito'
-    link: str = 'https://www.avito.ru'
-
     @staticmethod
     def _get_service(x: element.Tag | None = None) -> str:
-        return Avito.name
+        return Avito.get_name()
 
     @staticmethod
     def _get_id(x: element.Tag) -> str:
@@ -22,33 +18,45 @@ class Avito(Service):
 
     @staticmethod
     def _get_title(x: element.Tag) -> str:
-        return x.find('div', attrs={'class': 'iva-item-titleStep-pdebR'}).find('a')
+        return x.select("div[class^=iva-item-titleStep-]", limit=1)[0].find('a')
+
+    @staticmethod
+    def __get_geo(x: element.Tag) -> element.Tag:
+        return x.select("div[class^=geo-root-]", limit=1)[0]
 
     @staticmethod
     def _get_location(x: element.Tag) -> str:
-        return x.find('div', attrs={'class': 'geo-root-zPwRk'}).find('p')
+        return [*Avito.__get_geo(x).children][0]
 
     @staticmethod
     def _get_station(x: element.Tag) -> str:
-        return ', '.join([x for x in map(
-            format_string,
-            x.find('p', attrs={'class': 'styles-module-root_top-p0_50'}).find_all('span')[1:]
-        ) if x])
+        return [*Avito.__get_geo(x).children][1]
 
     @staticmethod
     def _get_price(x: element.Tag) -> str:
         return '%s · %s' % (
-            format_string(x.find('div', attrs={'class': 'iva-item-priceStep-uq2CQ'})),
-            format_string(x.find('div', attrs={'class': 'iva-item-autoParamsStep-WzfS8'}))
+            format_string(
+                x.select("div[class^=iva-item-priceStep-]", limit=1)[0]
+            ),
+            format_string(
+                x.select("div[class^=iva-item-autoParamsStep-]", limit=1)[0]
+            )
         )
 
     @staticmethod
     def _get_description(x: element.Tag) -> str:
-        return x.find('div', attrs={'class': 'iva-item-descriptionStep-C0ty1'})
+        return x.select("div[class^=iva-item-bottomBlock-]", limit=1)[0].find("p")
 
     @staticmethod
     def _get_link(x: element.Tag) -> str:
-        return Avito.link + format_string(x.find('a').get('href'))
+        return Avito.get_link() + format_string(x.find('a').get('href'))
+    
+    @staticmethod
+    def _get_images(x: element.Tag) -> str:
+        ul: element.Tag = x.select("ul[class^=photo-slider-list-]", limit=1)[0]
+        return json.dumps(
+            [x.get('data-marker', '').replace('slider-image/image-', '').split('?')[0] for x in ul.children]
+        )
 
     @staticmethod
     def scrape(link: str, *args, **kwargs) -> BeautifulSoup:
@@ -64,7 +72,11 @@ class Avito(Service):
         else:
             raise Exception('URL or BeautifulSoup required')
 
-        tags = soup.find_all('div', {'class': 'iva-item-root-_lk9K'})[:limit][::-1]
+        tags = [x for x in soup.select(
+            "div[class^=iva-item-root-]"
+        ) if not x.select("div[class*=iva-item-grow-]")][:limit][::-1]
+        logger.info(f"Found {len(tags)} tags from {limit}")
+        
         return Service.parse(
             tags,
             {k.split('_', 2)[-1]: v for k, v in vars(Avito).items() if k.startswith('_get_')}

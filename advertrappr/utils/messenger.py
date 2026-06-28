@@ -1,27 +1,25 @@
 from jinja2 import Template
 from pathlib import Path
-from telegram import Bot as _Bot
+from telegram import Bot as _Bot, InputMediaPhoto
+from telegram.constants import ParseMode
 from time import sleep
 import asyncio
+import json
 import re
 import typing as t
+import io
+import requests
 
-from advertrappr.utils.service import Advert
-from advertrappr.utils.logger import getLogger
+from advertrappr.settings import Settings
+from advertrappr.utils.services.service import Advert, getLogger
 
-
-_TEMPLATES_DIR = Path(__file__).parent / 'templates'
-with open(_TEMPLATES_DIR / 'valid.md') as f:
-    _VALID = f.read()
-with open(_TEMPLATES_DIR / 'invalid.md') as f:
-    _INVALID = f.read()
 
 logger = getLogger(__name__)
 
 
 class Bot(_Bot):
-    _temp_valid = Template(_VALID)
-    _temp_invalid = Template(_INVALID)
+    _temp_valid = Template((Settings.temp_path / 'valid.md').read_text())
+    _temp_invalid = Template((Settings.temp_path / 'invalid.md').read_text())
 
     def format_record(self, record: Advert | str) -> str:
         _repl: t.Callable = lambda x: re.sub(r'\n[\ |\n|\t]*', ' ', x)[:200]
@@ -33,6 +31,7 @@ class Bot(_Bot):
             else:
                 text = self._temp_valid.render(**{
                     **record._asdict(),
+                    'location': re.sub(r'[\ ]+', ' ', record.location),
                     'location_repl': _repl(record.location).replace(' ', '⠀'),
                     'description_repl': _repl(record.description),
                 })
@@ -46,21 +45,51 @@ class Bot(_Bot):
         text = text.replace('<br>\n', '\n')
         return text
 
-    def send_message(self, record: Advert | str, **kwargs) -> None:
-        kwargs['text'] = self.format_text(record)
-        try:
+    def send_messages(self, texts: list[Advert | str], cooldown: int = 5, **kwargs) -> None:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(super().send_message(**kwargs))
-        except Exception as e:
-            logger.error('Send error: %s', e)
+            try:
+                for i, x in enumerate(texts):
+                    if len(images := [*json.loads(x.images)]) < 5:
+                        images = [*images, *(['']*5)][:5]
 
-    def send_messages(self, texts: list[Advert | str], cooldown: int = 5, **kwargs) -> None:
-        for x in texts:
-            self.send_message(x, **kwargs)
-            if len(texts) == 1:
-                continue
-            sleep(cooldown)
+                    kwargs['media'] = [InputMediaPhoto(
+                        media=download_photo_to_memory(y),
+                        **({} if j != 0 else {"caption": self.format_text(x), "parse_mode": ParseMode.HTML})
+                    ) for j, y in enumerate(images)]
+                    loop.run_until_complete(super().send_media_group(**kwargs))
+                    if i != len(texts) - 1:
+                        loop.run_until_complete(asyncio.sleep(cooldown))
+            finally:
+                loop.close()
+
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+placeholder = io.BytesIO(requests.get(
+    'https://upload.wikimedia.org/wikipedia/commons/5/59/Empty.png', headers=headers, timeout=10
+).content)
+placeholder.name = "placeholder.png"
+
+
+def download_photo_to_memory(url: str) -> io.BytesIO:
+    if not url:
+        placeholder.seek(0)
+        return placeholder
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            file_like = io.BytesIO(response.content)
+            file_like.name = "photo.jpg"
+            return file_like
+            
+        raise Exception(f"Failed to download image. Status-code: {response.status_code} for: \"{url}\"")
+    except Exception as e:
+        logger.error(f"Failed to download image at \"{url}\": {e}")
+        placeholder.seek(0)
+        return placeholder
+
 
 
 def send_messages(message: t.Any, **kwargs) -> None:

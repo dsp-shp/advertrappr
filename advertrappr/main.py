@@ -27,7 +27,7 @@ def cli(ctx: click.Context) -> None:
     help='Data dispose (days, default=7, None for no dispose)')
 @click.option('-r', '--repeat', type=int, default=None,
     help='Sleep before next search (secs, default=None, None for no repeat)')
-@click.argument("urls", help='List of URLs to scrape', nargs=-1)
+@click.argument("urls", nargs=-1)
 @click.pass_context
 def run(
     ctx: click.Context,
@@ -59,8 +59,8 @@ def run(
         for url, service_name in services.items():
             try:
                 parsed = get_service(service_name).parse(url, **{
-                    **settings['scrapper'],
-                    **settings['parsers'].get(service_name, {}),
+                    **settings.config.scrapper,
+                    **settings.config.parsers.get(service_name, {}),
                 })
                 stored = set(advs_stored.query(
                     'service == "%s"' % service_name
@@ -76,7 +76,7 @@ def run(
             df = pd.DataFrame(advs)
             df['__processed'] = datetime.now()
             settings.db_conn.sql('INSERT INTO advs SELECT * FROM df')
-            send_messages(advs, **settings['messenger'])
+            send_messages(advs, **settings.config.messenger)
 
         if not repeat:
             return
@@ -111,11 +111,11 @@ def fetch(ctx: click.Context, query: str, table: bool = False) -> None:
 
 
 @cli.command()
-@click.argument('message', required=True)
+@click.argument("texts", nargs=-1)
 @click.pass_context
-def send(ctx: click.Context, message: str) -> None:
+def send(ctx: click.Context, texts: tuple[str]) -> None:
     """Send any text message"""
-    send_messages(message, **settings['messenger'])
+    send_messages(texts, **settings.config.messenger)
 
 
 if __name__ in ('__main__'):

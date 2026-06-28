@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import os
 import typing as t
@@ -7,7 +7,6 @@ import typing as t
 from bs4 import BeautifulSoup, element
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-
 from advertrappr.utils.logger import getLogger
 
 
@@ -24,7 +23,9 @@ class Advert:
     price: str
     description: str
     link: str
+    images: str
 
+    def _asdict(self) -> dict: return asdict(self)
 
 def format_string(str_or_tag: str | element.Tag, *args, **kwargs) -> str | None:
     return (
@@ -42,6 +43,14 @@ def ensure_format(func: t.Callable) -> t.Callable:
 
 
 class Service(ABC):
+
+    @classmethod
+    def get_name(cls) -> str:
+        return cls.__name__.capitalize()
+    
+    @classmethod
+    def get_link(cls) -> str:
+        return f'https://{cls.get_name().lower()}.ru'
 
     @staticmethod
     @abstractmethod
@@ -85,6 +94,11 @@ class Service(ABC):
 
     @staticmethod
     @abstractmethod
+    def _get_images(x: element.Tag) -> str:
+        pass
+
+    @staticmethod
+    @abstractmethod
     def scrape(
         link: str,
         handle_captcha: bool = False,
@@ -92,6 +106,12 @@ class Service(ABC):
         options: list[str] = ['--disable-gpu', '--no-sandbox', '--headless'],
         **kwargs
     ) -> BeautifulSoup:
+        from advertrappr.settings import Settings
+        from datetime import datetime
+        cache_path = Settings.cache_path / str(datetime.now().date())
+        cache_path.mkdir(parents=True, exist_ok=True)
+
+        return BeautifulSoup((Settings.cache_path / str(datetime.now().date()) / "test.html").read_text(), 'lxml')
         chrome_opts = Options()
         for x in options:
             chrome_opts.add_argument(x)
@@ -104,7 +124,11 @@ class Service(ABC):
             source: str = driver.page_source
             logger.info('Page source size: %s', len(source))
 
-            return BeautifulSoup(source, 'html.parser')
+            (Settings.cache_path / str(datetime.now().date()) / "test.html").write_text(
+                source
+            )
+
+            return BeautifulSoup(source, 'lxml')
         except Exception as e:
             logger.error(e)
         finally:

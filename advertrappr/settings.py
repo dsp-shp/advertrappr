@@ -1,19 +1,26 @@
+from typing import NamedTuple
 from pathlib import Path
 import typing as t
 
-from jinja2 import Environment, FileSystemLoader
 from yaml import dump, safe_load
 import duckdb
 
 
+class Config(NamedTuple):
+    messenger: dict[str, t.Any]
+    parsers: dict[str, t.Any]
+    scrapper: dict[str, t.Any]
+
+
 class Settings:
     base_path = Path.home() / '.cache' / 'advertrappr'
-    temp_path = base_path / 'templates'
+    temp_path = Path(__file__).parent / 'templates'
+    cache_path = base_path / "cache"
     config_path = base_path / 'config.yaml'
-    config: dict[str, t.Any]
+    config: Config
     config_default: dict[str, t.Any] = {
         'messenger': {
-            'cooldown': 5, 'disable_web_page_preview': True, 'parse_mode': 'HTML',
+            'cooldown': 5,
         },
         'scrapper': {
             'options': ['--disable-gpu', '--no-sandbox', '--headless'],
@@ -34,10 +41,10 @@ class Settings:
                 allow_unicode=True,
             ))
 
-        self.config = {
+        self.config = Config(**{
             **{x: {} for x in self.config_default},
             **safe_load(self.config_path.read_text()),
-        }
+        })
 
         self.db_conn = duckdb.connect(str(self.db_path), False)
         from advertrappr.utils import Advert, Log
