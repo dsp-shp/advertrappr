@@ -30,7 +30,10 @@ class Avito(Service):
 
     @staticmethod
     def _get_station(x: element.Tag) -> str:
-        return [*Avito.__get_geo(x).children][1]
+        try:
+            return [*Avito.__get_geo(x).children][1]
+        except:
+            return ""
 
     @staticmethod
     def _get_price(x: element.Tag) -> str:
